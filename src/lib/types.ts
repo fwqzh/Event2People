@@ -1,0 +1,149 @@
+import type { EventType, PeopleDetectionStatus, SourceType } from "@prisma/client";
+
+export type EventTag =
+  | "AI Agent"
+  | "Coding Agent"
+  | "Embodied AI"
+  | "Robotics"
+  | "Multimodal"
+  | "Reasoning"
+  | "Research Infra"
+  | "Voice"
+  | "Video"
+  | "World Model"
+  | "Open Source Infra"
+  | "Other";
+
+export type MetricItem = {
+  label: string;
+  value: string;
+};
+
+export type LinkItem = {
+  label: string;
+  url: string;
+};
+
+export type PersonInput = {
+  stableId: string;
+  name: string;
+  identitySummaryZh: string;
+  evidenceSummaryZh: string;
+  sourceUrls: string[];
+  githubUrl?: string | null;
+  scholarUrl?: string | null;
+  linkedinUrl?: string | null;
+  xUrl?: string | null;
+  homepageUrl?: string | null;
+  email?: string | null;
+  organizationNamesRaw?: string[];
+  schoolNamesRaw?: string[];
+  labNamesRaw?: string[];
+  bioSnippetsRaw?: string[];
+  founderHistoryRaw?: string[];
+};
+
+export type ProjectInput = {
+  stableId: string;
+  repoName: string;
+  repoUrl: string;
+  ownerName: string;
+  ownerUrl: string;
+  stars: number;
+  starDelta7d: number;
+  todayStars?: number | null;
+  contributorsCount: number;
+  repoCreatedAt: Date;
+  repoUpdatedAt: Date;
+  repoDescriptionRaw?: string | null;
+  readmeExcerptRaw?: string | null;
+  relatedPaperStableIds?: string[];
+};
+
+export type PaperInput = {
+  stableId: string;
+  paperTitle: string;
+  paperUrl: string;
+  authors: string[];
+  authorsCount: number;
+  publishedAt: Date;
+  abstractRaw?: string | null;
+  codeUrl?: string | null;
+  semanticScholarUrl?: string | null;
+  relatedProjectStableIds?: string[];
+};
+
+export type RepoPaperLinkInput = {
+  projectStableId: string;
+  paperStableId: string;
+  evidenceType: string;
+  evidenceSourceUrl: string;
+  evidenceExcerpt: string;
+  confidence: "confirmed" | "candidate";
+};
+
+export type EventInput = {
+  stableId: string;
+  sourceType: SourceType;
+  eventType: EventType;
+  eventTag: EventTag;
+  eventTagConfidence: number;
+  eventTitleZh: string;
+  eventHighlightZh: string;
+  eventDetailSummaryZh?: string | null;
+  timePrimary: Date;
+  metrics: MetricItem[];
+  sourceLinks: LinkItem[];
+  peopleDetectionStatus: PeopleDetectionStatus;
+  projectStableIds: string[];
+  paperStableIds: string[];
+  personStableIds: string[];
+  displayRank: number;
+  relatedRepoCount?: number | null;
+  relatedPaperCount?: number | null;
+};
+
+export type PipelineEntrySeedInput = {
+  personStableId: string;
+  savedAt: Date;
+  savedFromEventStableId: string;
+  savedFromEventTitle: string;
+  recentActivitySummaryZh: string;
+  copySummaryShortZh?: string;
+  copySummaryFullZh?: string;
+  status?: string | null;
+  lastContactedAt?: Date | null;
+  notes?: string | null;
+};
+
+export type DatasetBundleInput = {
+  label: string;
+  source: string;
+  projects: ProjectInput[];
+  papers: PaperInput[];
+  people: PersonInput[];
+  repoPaperLinks: RepoPaperLinkInput[];
+  events: EventInput[];
+  pipelineEntries?: PipelineEntrySeedInput[];
+};
+
+export type PersonView = PersonInput & {
+  links: LinkItem[];
+};
+
+export type EventView = EventInput & {
+  timeAgo: string;
+  people: PersonView[];
+  projects: ProjectInput[];
+  papers: PaperInput[];
+  isSaved: boolean;
+  sourceSummaryLabel: string;
+  cardSummary: string;
+  detailSummary: string;
+  introSummary: string;
+};
+
+export type PipelineEntryView = PipelineEntrySeedInput & {
+  person: PersonView;
+  timeAgo: string;
+};

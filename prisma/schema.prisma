@@ -1,0 +1,245 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum SourceType {
+  github
+  arxiv
+}
+
+enum EventType {
+  new_repo
+  new_paper
+  implementation
+  convergence
+  activity_spike
+  paper_with_code
+}
+
+enum PeopleDetectionStatus {
+  resolved
+  partial
+  missing
+}
+
+enum DatasetStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum RefreshRunStatus {
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+model DatasetVersion {
+  id             String         @id
+  label          String?
+  status         DatasetStatus  @default(DRAFT)
+  source         String?
+  createdAt      DateTime       @default(now())
+  publishedAt    DateTime?
+  events         Event[]
+  people         Person[]
+  papers         Paper[]
+  projects       Project[]
+  repoPaperLinks RepoPaperLink[]
+  refreshRuns    RefreshRun[]
+
+  @@index([status, publishedAt])
+}
+
+model RefreshRun {
+  id               String           @id
+  trigger          String
+  status           RefreshRunStatus @default(RUNNING)
+  message          String?
+  startedAt        DateTime         @default(now())
+  finishedAt       DateTime?
+  datasetVersionId String?
+  datasetVersion   DatasetVersion?  @relation(fields: [datasetVersionId], references: [id], onDelete: SetNull)
+
+  @@index([status, startedAt])
+}
+
+model Event {
+  id                    String                @id
+  stableId              String
+  datasetVersionId      String
+  sourceType            SourceType
+  eventType             EventType
+  eventTag              String
+  eventTagConfidence    Float
+  eventTitleZh          String
+  eventHighlightZh      String
+  eventDetailSummaryZh  String?
+  timePrimary           DateTime
+  metricsJson           Json
+  sourceLinksJson       Json
+  peopleDetectionStatus PeopleDetectionStatus
+  displayRank           Int
+  relatedRepoCount      Int?
+  relatedPaperCount     Int?
+  createdAt             DateTime              @default(now())
+  datasetVersion        DatasetVersion        @relation(fields: [datasetVersionId], references: [id], onDelete: Cascade)
+  projectLinks          EventProject[]
+  paperLinks            EventPaper[]
+  personLinks           EventPerson[]
+
+  @@unique([datasetVersionId, stableId])
+  @@index([datasetVersionId, sourceType, displayRank])
+}
+
+model Person {
+  id                   String         @id
+  stableId             String
+  datasetVersionId     String
+  name                 String
+  identitySummaryZh    String
+  evidenceSummaryZh    String
+  sourceUrlsJson       Json
+  githubUrl            String?
+  scholarUrl           String?
+  linkedinUrl          String?
+  xUrl                 String?
+  homepageUrl          String?
+  email                String?
+  organizationNamesRaw Json?
+  schoolNamesRaw       Json?
+  labNamesRaw          Json?
+  bioSnippetsRaw       Json?
+  founderHistoryRaw    Json?
+  createdAt            DateTime       @default(now())
+  datasetVersion       DatasetVersion @relation(fields: [datasetVersionId], references: [id], onDelete: Cascade)
+  eventLinks           EventPerson[]
+
+  @@unique([datasetVersionId, stableId])
+  @@index([datasetVersionId, stableId])
+}
+
+model Project {
+  id                  String         @id
+  stableId            String
+  datasetVersionId    String
+  repoName            String
+  repoUrl             String
+  ownerName           String
+  ownerUrl            String
+  stars               Int
+  starDelta7d         Int
+  contributorsCount   Int
+  repoCreatedAt       DateTime
+  repoUpdatedAt       DateTime
+  repoDescriptionRaw  String?
+  readmeExcerptRaw    String?
+  relatedPaperIdsJson Json?
+  createdAt           DateTime       @default(now())
+  datasetVersion      DatasetVersion @relation(fields: [datasetVersionId], references: [id], onDelete: Cascade)
+  eventLinks          EventProject[]
+  paperLinks          RepoPaperLink[]
+  snapshots           ProjectSnapshot[]
+
+  @@unique([datasetVersionId, stableId])
+  @@index([datasetVersionId, stars])
+}
+
+model ProjectSnapshot {
+  id               String   @id
+  datasetVersionId String
+  projectId        String
+  capturedAt       DateTime
+  stars            Int
+  starDelta7d      Int
+  project          Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, capturedAt])
+}
+
+model Paper {
+  id                String         @id
+  stableId          String
+  datasetVersionId  String
+  paperTitle        String
+  paperUrl          String
+  authorsJson       Json
+  authorsCount      Int
+  publishedAt       DateTime
+  abstractRaw       String?
+  codeUrl           String?
+  relatedProjectIds Json?
+  createdAt         DateTime       @default(now())
+  datasetVersion    DatasetVersion @relation(fields: [datasetVersionId], references: [id], onDelete: Cascade)
+  eventLinks        EventPaper[]
+  repoLinks         RepoPaperLink[]
+
+  @@unique([datasetVersionId, stableId])
+  @@index([datasetVersionId, publishedAt])
+}
+
+model RepoPaperLink {
+  id                String         @id
+  datasetVersionId  String
+  projectId         String
+  paperId           String
+  evidenceType      String
+  evidenceSourceUrl String
+  evidenceExcerpt   String
+  confidence        String
+  datasetVersion    DatasetVersion @relation(fields: [datasetVersionId], references: [id], onDelete: Cascade)
+  project           Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  paper             Paper          @relation(fields: [paperId], references: [id], onDelete: Cascade)
+
+  @@unique([datasetVersionId, projectId, paperId, evidenceType])
+  @@index([datasetVersionId, confidence])
+}
+
+model EventProject {
+  eventId   String
+  projectId String
+  event     Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@id([eventId, projectId])
+}
+
+model EventPaper {
+  eventId String
+  paperId String
+  event   Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  paper   Paper @relation(fields: [paperId], references: [id], onDelete: Cascade)
+
+  @@id([eventId, paperId])
+}
+
+model EventPerson {
+  eventId  String
+  personId String
+  event    Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  person   Person @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  @@id([eventId, personId])
+}
+
+model PipelineEntry {
+  id                     String   @id
+  personStableId         String
+  savedAt                DateTime @default(now())
+  savedFromEventStableId String
+  savedFromEventTitle    String
+  recentActivitySummaryZh String
+  status                 String?
+  copySummaryShortZh     String?
+  copySummaryFullZh      String?
+  lastContactedAt        DateTime?
+  notes                  String?
+
+  @@unique([personStableId])
+  @@index([savedAt])
+}
