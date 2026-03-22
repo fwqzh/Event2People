@@ -1,15 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { startTransition, useEffect, useEffectEvent, useMemo, useState } from "react";
+import { startTransition, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 
-import type { EventView } from "@/lib/types";
+import type { EventDetailView, EventSummaryView, PersonView } from "@/lib/types";
 
 type EventSource = "github" | "arxiv";
+type EventDetailStatus = "idle" | "loading" | "ready" | "error";
 
 type EventBoardProps = {
-  githubEvents: EventView[];
-  arxivEvents: EventView[];
+  datasetVersionId: string;
+  githubEvents: EventSummaryView[];
+  arxivEvents: EventSummaryView[];
 };
 
 const DEFAULT_VISIBLE_COUNT = 10;
@@ -24,13 +26,13 @@ const SECTION_CONFIG: Record<
   }
 > = {
   github: {
-    title: "GitHub",
+    title: "GitHub Trending",
     kicker: "Build / Execution",
     status: "GitHub Trending Daily",
     description: "基于 GitHub 官方 Trending Daily 页面动态解析，按 today stars 排序后展示 Top 10 项目事件。",
   },
   arxiv: {
-    title: "arXiv",
+    title: "ArXiv Trending",
     kicker: "Research / Entry",
     status: "arXiv + Semantic Scholar",
     description:
@@ -38,7 +40,8 @@ const SECTION_CONFIG: Record<
   },
 };
 
-export function EventBoard({ githubEvents, arxivEvents }: EventBoardProps) {
+export function EventBoard({ datasetVersionId, githubEvents, arxivEvents }: EventBoardProps) {
+  const detailRequestRef = useRef<{ stableId: string; controller: AbortController } | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [visibleCounts, setVisibleCounts] = useState<Record<EventSource, number>>({
     github: DEFAULT_VISIBLE_COUNT,
@@ -49,6 +52,10 @@ export function EventBoard({ githubEvents, arxivEvents }: EventBoardProps) {
     arxiv: false,
   });
   const [newlySavedPersonIds, setNewlySavedPersonIds] = useState<Set<string>>(() => new Set());
+  const [detailsById, setDetailsById] = useState<Record<string, EventDetailView>>({});
+  const [detailStatusById, setDetailStatusById] = useState<Record<string, EventDetailStatus>>({});
+  const [detailErrorById, setDetailErrorById] = useState<Record<string, string>>({});
+  const [detailReloadTokenById, setDetailReloadTokenById] = useState<Record<string, number>>({});
   const [status, setStatus] = useState("");
 
   const allEvents = useMemo(() => [...githubEvents, ...arxivEvents], [arxivEvents, githubEvents]);
@@ -65,7 +72,63 @@ export function EventBoard({ githubEvents, arxivEvents }: EventBoardProps) {
     return ids;
   }, [allEvents, newlySavedPersonIds]);
 
-  const totalMappedPeople = useMemo(() => new Set(allEvents.flatMap((event) => event.personStableIds)).size, [allEvents]);
+  const abortDetailRequest = useEffectEvent(() => {
+    if (detailRequestRef.current) {
+      detailRequestRef.current.controller.abort();
+      detailRequestRef.current = null;
+    }
+  });
+
+  const loadEventDetail = useEffectEvent(async (stableId: string) => {
+    if (detailsById[stableId] || detailStatusById[stableId] === "loading") {
+      return;
+    }
+
+    abortDetailRequest();
+
+    const controller = new AbortController();
+    detailRequestRef.current = { stableId, controller };
+    setDetailStatusById((current) => ({ ...current, [stableId]: "loading" }));
+    setDetailErrorById((current) => {
+      const next = { ...current };
+      delete next[stableId];
+      return next;
+    });
+
+    try {
+      const response = await fetch(`/api/events/detail?stableId=${encodeURIComponent(stableId)}`, {
+        method: "GET",
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      const payload = await response.json();
+
+      if (!response.ok) {
+        throw new Error(payload.error ?? "详情加载失败");
+      }
+
+      if (controller.signal.aborted) {
+        return;
+      }
+
+      setDetailsById((current) => ({ ...current, [stableId]: payload.detail as EventDetailView }));
+      setDetailStatusById((current) => ({ ...current, [stableId]: "ready" }));
+    } catch (error) {
+      if (controller.signal.aborted) {
+        return;
+      }
+
+      setDetailStatusById((current) => ({ ...current, [stableId]: "error" }));
+      setDetailErrorById((current) => ({
+        ...current,
+        [stableId]: error instanceof Error ? error.message : "详情加载失败",
+      }));
+    } finally {
+      if (detailRequestRef.current?.stableId === stableId) {
+        detailRequestRef.current = null;
+      }
+    }
+  });
 
   const onEscape = useEffectEvent((event: KeyboardEvent) => {
     if (event.key === "Escape") {
@@ -77,6 +140,33 @@ export function EventBoard({ githubEvents, arxivEvents }: EventBoardProps) {
     window.addEventListener("keydown", onEscape);
     return () => window.removeEventListener("keydown", onEscape);
   }, []);
+
+  useEffect(() => {
+    abortDetailRequest();
+    setDetailsById({});
+    setDetailStatusById({});
+    setDetailErrorById({});
+    setDetailReloadTokenById({});
+  }, [datasetVersionId]);
+
+  useEffect(() => {
+    if (expandedId && !allEvents.some((event) => event.stableId === expandedId)) {
+      setExpandedId(null);
+    }
+  }, [allEvents, expandedId]);
+
+  const expandedReloadToken = expandedId ? detailReloadTokenById[expandedId] ?? 0 : 0;
+
+  useEffect(() => {
+    if (!expandedId) {
+      abortDetailRequest();
+      return;
+    }
+
+    void loadEventDetail(expandedId);
+  }, [datasetVersionId, expandedId, expandedReloadToken]);
+
+  useEffect(() => () => abortDetailRequest(), []);
 
   async function saveToPipeline(personStableId: string, eventStableId: string) {
     setStatus("");
@@ -113,12 +203,37 @@ export function EventBoard({ githubEvents, arxivEvents }: EventBoardProps) {
     toggleExpanded(stableId);
   }
 
-  function getCardTitle(event: EventView) {
-    if (event.sourceType === "arxiv") {
-      return event.papers[0]?.paperTitle ?? event.eventTitleZh;
+  function getPersonMeta(person: PersonView) {
+    return [
+      person.organizationNamesRaw?.[0] ?? person.schoolNamesRaw?.[0] ?? person.labNamesRaw?.[0] ?? "",
+      person.email ? `Email: ${person.email}` : "",
+    ].filter(Boolean);
+  }
+
+  function getPrimarySourceUrl(event: EventSummaryView) {
+    return event.sourceLinks[0]?.url ?? null;
+  }
+
+  function getSecondarySourceLinks(event: EventSummaryView) {
+    const primarySourceUrl = getPrimarySourceUrl(event);
+    const seen = new Set<string>();
+
+    return event.sourceLinks.filter((sourceLink) => {
+      if (sourceLink.url === primarySourceUrl || seen.has(sourceLink.url)) {
+        return false;
+      }
+
+      seen.add(sourceLink.url);
+      return true;
+    });
+  }
+
+  function shouldShowExpandedIntro(detail: EventDetailView | undefined, cardSummary: string) {
+    if (!detail?.introSummary) {
+      return false;
     }
 
-    return event.eventTitleZh;
+    return detail.introSummary !== cardSummary && detail.introSummary !== detail.detailSummary;
   }
 
   function toggleSectionCollapse(source: EventSource) {
@@ -142,7 +257,7 @@ export function EventBoard({ githubEvents, arxivEvents }: EventBoardProps) {
     });
   }
 
-  function renderSection(source: EventSource, events: EventView[]) {
+  function renderSection(source: EventSource, events: EventSummaryView[]) {
     const config = SECTION_CONFIG[source];
     const isCollapsed = collapsedSections[source];
     const visibleCount = visibleCounts[source];
@@ -159,9 +274,20 @@ export function EventBoard({ githubEvents, arxivEvents }: EventBoardProps) {
               <span className="section-kicker">{config.kicker}</span>
               <span className="status-chip">{config.status}</span>
             </div>
-            <h2>
-              {config.title} <span>· {events.length} 条近期事件</span>
-            </h2>
+            <div className="board-section__title-row">
+              <button
+                type="button"
+                className={`board-section__toggle ${isCollapsed ? "is-collapsed" : "is-expanded"}`}
+                onClick={() => toggleSectionCollapse(source)}
+                aria-expanded={!isCollapsed}
+                aria-label={isCollapsed ? `展开 ${config.title} 板块` : `收起 ${config.title} 板块`}
+              >
+                <span className="board-section__toggle-icon" aria-hidden="true" />
+              </button>
+              <h2>
+                {config.title} <span>· {events.length} 条近期事件</span>
+              </h2>
+            </div>
             <p className="board-section__copy">{config.description}</p>
           </div>
 
@@ -182,10 +308,6 @@ export function EventBoard({ githubEvents, arxivEvents }: EventBoardProps) {
             </div>
 
             <div className="board-section__actions">
-              <button type="button" className="ghost-button" onClick={() => toggleSectionCollapse(source)}>
-                {isCollapsed ? "展开板块" : "折叠板块"}
-              </button>
-
               {!isCollapsed && events.length > 10 ? (
                 <button type="button" className="ghost-button" onClick={() => toggleVisibleCount(source, events.length)}>
                   {visibleCount >= events.length ? "收起列表" : "查看更多"}
@@ -200,7 +322,21 @@ export function EventBoard({ githubEvents, arxivEvents }: EventBoardProps) {
             {visibleEvents.map((event) => {
               const isExpanded = expandedId === event.stableId;
               const isDimmed = expandedId !== null && expandedId !== event.stableId;
-              const showEventLens = event.detailSummary !== event.eventHighlightZh;
+              const detail = detailsById[event.stableId];
+              const detailStatus = detailStatusById[event.stableId] ?? "idle";
+              const detailError = detailErrorById[event.stableId];
+              const isDetailLoading = isExpanded && detailStatus === "loading";
+              const showExpandedIntro = shouldShowExpandedIntro(detail, event.cardSummary);
+              const primarySourceUrl = getPrimarySourceUrl(event);
+              const secondarySourceLinks = getSecondarySourceLinks(event);
+              const showExpandedIntroInCard = isExpanded && event.sourceType === "github" && showExpandedIntro;
+              const showExpandedIntroInDetail = event.sourceType !== "github" && showExpandedIntro;
+              const showPrimarySourceLinkInCard = isExpanded && event.sourceType === "github" && Boolean(primarySourceUrl);
+              const highlightCopy = showExpandedIntroInCard ? detail!.introSummary : event.cardSummary;
+              const showDetailSummaryInPanel = event.sourceType !== "github" && Boolean(detail);
+              const showEventLens = Boolean(detail) && detail.detailSummary !== event.eventHighlightZh;
+              const primaryDetailPanelTitle = event.sourceType === "github" ? "项目信号" : detail?.sourceSummaryLabel ?? "论文简介";
+              const people = detail?.people ?? [];
 
               return (
                 <div key={event.stableId} className={`event-stack ${isExpanded ? "is-expanded" : ""}`}>
@@ -230,10 +366,35 @@ export function EventBoard({ githubEvents, arxivEvents }: EventBoardProps) {
                     </div>
 
                     <div className="event-card__body">
-                      <h3>{getCardTitle(event)}</h3>
+                      <div className="event-card__title-row">
+                        <button
+                          type="button"
+                          className={`event-card__toggle ${isExpanded ? "is-expanded" : "is-collapsed"}`}
+                          onClick={() => toggleExpanded(event.stableId)}
+                          aria-expanded={isExpanded}
+                          aria-label={isExpanded ? `收起 ${event.cardTitle}` : `展开 ${event.cardTitle}`}
+                        >
+                          <span className="event-card__toggle-icon" aria-hidden="true" />
+                        </button>
+                        <h3>{event.cardTitle}</h3>
+                      </div>
                       <p className="event-card__highlight" suppressHydrationWarning>
-                        {event.cardSummary}
+                        {highlightCopy}
                       </p>
+                      {showPrimarySourceLinkInCard && primarySourceUrl ? (
+                        <div className="event-card__primary-link-row">
+                          <span className="event-card__primary-link-label">链接：</span>
+                          <Link
+                            className="event-card__primary-link"
+                            href={primarySourceUrl}
+                            onClick={(clickEvent) => clickEvent.stopPropagation()}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {primarySourceUrl}
+                          </Link>
+                        </div>
+                      ) : null}
                     </div>
 
                     <div className="event-card__foot">
@@ -248,21 +409,25 @@ export function EventBoard({ githubEvents, arxivEvents }: EventBoardProps) {
 
                       <div className="people-preview">
                         <span className="people-preview__label">关联人物</span>
-                        {event.people.length > 0 ? (
+                        {event.previewPeople.length > 0 ? (
                           <>
-                            {event.people.slice(0, PREVIEW_PEOPLE_LIMIT).map((person) => (
-                              <Link
-                                key={person.stableId}
-                                href={person.links[0]?.url ?? "#"}
-                                onClick={(clickEvent) => clickEvent.stopPropagation()}
-                                target={person.links[0]?.url ? "_blank" : undefined}
-                                rel={person.links[0]?.url ? "noreferrer" : undefined}
-                              >
-                                {person.name}
-                              </Link>
-                            ))}
-                            {event.people.length > PREVIEW_PEOPLE_LIMIT ? (
-                              <span>+{event.people.length - PREVIEW_PEOPLE_LIMIT} more</span>
+                            {event.previewPeople.map((person) =>
+                              person.primaryLinkUrl ? (
+                                <Link
+                                  key={person.stableId}
+                                  href={person.primaryLinkUrl}
+                                  onClick={(clickEvent) => clickEvent.stopPropagation()}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  {person.name}
+                                </Link>
+                              ) : (
+                                <span key={person.stableId}>{person.name}</span>
+                              ),
+                            )}
+                            {event.peopleCount > PREVIEW_PEOPLE_LIMIT ? (
+                              <span>+{event.peopleCount - PREVIEW_PEOPLE_LIMIT} more</span>
                             ) : null}
                           </>
                         ) : (
@@ -279,97 +444,133 @@ export function EventBoard({ githubEvents, arxivEvents }: EventBoardProps) {
                               <div className="event-detail-card__meta">
                                 <span className="section-kicker">Event Detail</span>
                                 <div className="event-detail-card__meta-pills">
-                                  <span className="status-chip">{event.people.length} 人物</span>
+                                  <span className="status-chip">{event.peopleCount} 人物</span>
                                   <span className="data-pill">{event.sourceLinks.length} 来源</span>
                                 </div>
                               </div>
-                              <h4>{getCardTitle(event)}</h4>
-                              <p suppressHydrationWarning>{event.introSummary}</p>
+                              {showExpandedIntroInDetail ? <p suppressHydrationWarning>{detail!.introSummary}</p> : null}
                             </div>
-                            <button type="button" className="close-button" onClick={() => setExpandedId(null)}>
-                              收起
-                            </button>
                           </div>
 
-                          <div className="event-detail-grid">
-                            <section className="detail-panel">
-                              <h5>{event.sourceSummaryLabel}</h5>
-                              <p suppressHydrationWarning>{event.detailSummary}</p>
-                              {showEventLens ? <p className="detail-panel__subcopy">事件判断：{event.eventHighlightZh}</p> : null}
-                              <div className="metric-column">
-                                {event.metrics.map((metric) => (
-                                  <div key={`${event.stableId}-detail-${metric.label}`} className="metric-line">
-                                    <span>{metric.label}</span>
-                                    <strong>{metric.value}</strong>
-                                  </div>
-                                ))}
+                          {isDetailLoading && !detail ? (
+                            <div className="detail-loading-panel" aria-live="polite">
+                              <span className="detail-loading-panel__spinner" aria-hidden="true" />
+                              <div>
+                                <strong>正在加载当前卡片详情</strong>
+                                <p>先优先补这张卡的人物与来源，其他卡片保持可展开。</p>
                               </div>
-                            </section>
+                            </div>
+                          ) : null}
 
-                            <section className="detail-panel">
-                              <h5>相关来源</h5>
-                              <div className="link-list">
-                                {event.sourceLinks.map((sourceLink) => (
-                                  <Link key={sourceLink.url} href={sourceLink.url} target="_blank" rel="noreferrer">
-                                    {sourceLink.label}
-                                  </Link>
-                                ))}
+                          {!detail && detailStatus === "error" ? (
+                            <div className="detail-loading-panel detail-loading-panel--error" aria-live="polite">
+                              <div>
+                                <strong>{detailError ?? "详情加载失败"}</strong>
+                                <p>当前列表仍可继续浏览，点击下方按钮可重试这张卡片。</p>
                               </div>
-                            </section>
+                              <button
+                                type="button"
+                                className="ghost-button"
+                                onClick={() =>
+                                  setDetailReloadTokenById((current) => ({
+                                    ...current,
+                                    [event.stableId]: (current[event.stableId] ?? 0) + 1,
+                                  }))
+                                }
+                              >
+                                重试详情
+                              </button>
+                            </div>
+                          ) : null}
 
-                            <section className="detail-panel detail-panel--wide">
-                              <h5>关联人物</h5>
-                              {event.people.length > 0 ? (
-                                <div className="person-card-grid">
-                                  {event.people.map((person) => {
-                                    const isSaved = savedPersonIds.has(person.stableId);
-
-                                    return (
-                                      <article key={person.stableId} className="person-card">
-                                        <div className="person-card__header">
-                                          <div>
-                                            <h6>{person.name}</h6>
-                                            <p>{person.identitySummaryZh}</p>
-                                          </div>
-                                          <button
-                                            type="button"
-                                            className="primary-button"
-                                            disabled={isSaved}
-                                            onClick={(clickEvent) => {
-                                              clickEvent.stopPropagation();
-                                              startTransition(() => {
-                                                void saveToPipeline(person.stableId, event.stableId).catch((error) => {
-                                                  setStatus(error instanceof Error ? error.message : "保存失败");
-                                                });
-                                              });
-                                            }}
-                                          >
-                                            {isSaved ? "已在 Pipeline" : "加入 Pipeline"}
-                                          </button>
-                                        </div>
-                                        <p className="person-card__evidence">证据：{person.evidenceSummaryZh}</p>
-                                        <div className="link-list">
-                                          {person.links.map((sourceLink) => (
-                                            <Link key={sourceLink.url} href={sourceLink.url} target="_blank" rel="noreferrer">
-                                              {sourceLink.label}
-                                            </Link>
-                                          ))}
-                                        </div>
-                                      </article>
-                                    );
-                                  })}
+                          {detail ? (
+                            <div className="event-detail-grid">
+                              <section className="detail-panel">
+                                <h5>{primaryDetailPanelTitle}</h5>
+                                {showDetailSummaryInPanel ? <p suppressHydrationWarning>{detail.detailSummary}</p> : null}
+                                {showEventLens ? <p className="detail-panel__subcopy">事件判断：{event.eventHighlightZh}</p> : null}
+                                <div className="metric-column">
+                                  {event.metrics.map((metric) => (
+                                    <div key={`${event.stableId}-detail-${metric.label}`} className="metric-line">
+                                      <span>{metric.label}</span>
+                                      <strong>{metric.value}</strong>
+                                    </div>
+                                  ))}
                                 </div>
-                              ) : (
-                                <div className="empty-state">暂未识别到明确关联人物</div>
-                              )}
-                            </section>
+                              </section>
 
-                            <section className="detail-panel">
-                              <h5>动作</h5>
-                              <p>确认人物值得继续追踪后再保存。进入 Pipeline 后可统一复制摘要并查看联系入口。</p>
-                              {status ? <p className="status-text">{status}</p> : null}
-                            </section>
-                          </div>
+                              {secondarySourceLinks.length > 0 ? (
+                                <section className="detail-panel">
+                                  <h5>相关来源</h5>
+                                  <div className="link-list">
+                                    {secondarySourceLinks.map((sourceLink) => (
+                                      <Link key={sourceLink.url} href={sourceLink.url} target="_blank" rel="noreferrer">
+                                        {sourceLink.label}
+                                      </Link>
+                                    ))}
+                                  </div>
+                                </section>
+                              ) : null}
+
+                              <section className="detail-panel detail-panel--wide">
+                                <h5>关联人物</h5>
+                                {people.length > 0 ? (
+                                  <div className="person-card-grid">
+                                    {people.map((person) => {
+                                      const isSaved = savedPersonIds.has(person.stableId);
+                                      const personMeta = getPersonMeta(person);
+
+                                      return (
+                                        <article key={person.stableId} className="person-card">
+                                          <div className="person-card__header">
+                                            <div>
+                                              <h6>{person.name}</h6>
+                                              <p>{person.identitySummaryZh}</p>
+                                            </div>
+                                            <button
+                                              type="button"
+                                              className="primary-button"
+                                              disabled={isSaved}
+                                              onClick={(clickEvent) => {
+                                                clickEvent.stopPropagation();
+                                                startTransition(() => {
+                                                  void saveToPipeline(person.stableId, event.stableId).catch((error) => {
+                                                    setStatus(error instanceof Error ? error.message : "保存失败");
+                                                  });
+                                                });
+                                              }}
+                                            >
+                                              {isSaved ? "已在 Pipeline" : "加入 Pipeline"}
+                                            </button>
+                                          </div>
+                                          {personMeta.length > 0 ? (
+                                            <div className="person-card__meta-row">
+                                              {personMeta.map((item) => (
+                                                <span key={`${person.stableId}-${item}`} className="person-card__meta-pill">
+                                                  {item}
+                                                </span>
+                                              ))}
+                                            </div>
+                                          ) : null}
+                                          <p className="person-card__evidence">证据：{person.evidenceSummaryZh}</p>
+                                          <div className="link-list">
+                                            {person.links.map((sourceLink) => (
+                                              <Link key={sourceLink.url} href={sourceLink.url} target="_blank" rel="noreferrer">
+                                                {sourceLink.label}
+                                              </Link>
+                                            ))}
+                                          </div>
+                                        </article>
+                                      );
+                                    })}
+                                  </div>
+                                ) : (
+                                  <div className="empty-state">暂未识别到明确关联人物</div>
+                                )}
+                                {status ? <p className="status-text">{status}</p> : null}
+                              </section>
+                            </div>
+                          ) : null}
                         </div>
                       </div>
                     </div>
@@ -389,30 +590,6 @@ export function EventBoard({ githubEvents, arxivEvents }: EventBoardProps) {
 
   return (
     <div className="board-layout">
-      <section className="toolbar-card toolbar-card--board">
-        <div className="toolbar-card__copy">
-          <span className="section-kicker">Event Board</span>
-          <h2>在变化发生之处，看见人。</h2>
-        </div>
-
-        <div className="toolbar-card__cluster">
-          <div className="toolbar-pill-group">
-            <span className="toolbar-metric-pill">
-              <strong>{allEvents.length}</strong>
-              <em>Total events</em>
-            </span>
-            <span className="toolbar-metric-pill">
-              <strong>{totalMappedPeople}</strong>
-              <em>Mapped people</em>
-            </span>
-            <span className="toolbar-metric-pill">
-              <strong>{savedPersonIds.size}</strong>
-              <em>Already saved</em>
-            </span>
-          </div>
-        </div>
-      </section>
-
       {renderSection("github", githubEvents)}
       {renderSection("arxiv", arxivEvents)}
     </div>

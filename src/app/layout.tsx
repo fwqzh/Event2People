@@ -3,6 +3,7 @@ import { IBM_Plex_Mono, IBM_Plex_Sans, Noto_Serif_SC } from "next/font/google";
 
 import { AmbientGrid } from "@/components/ambient-grid";
 import { SiteHeader } from "@/components/site-header";
+import { startRefreshScheduler } from "@/lib/refresh-scheduler";
 
 import "./globals.css";
 
@@ -34,6 +35,8 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  startRefreshScheduler();
+
   return (
     <html lang="zh-CN" className={`${notoSerifSc.variable} ${ibmPlexSans.variable} ${ibmPlexMono.variable}`}>
       <body>

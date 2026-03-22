@@ -8,7 +8,11 @@ export default async function Home() {
 
   return (
     <div className="page-content">
-      <EventBoard githubEvents={data.githubEvents} arxivEvents={data.arxivEvents} />
+      <EventBoard
+        datasetVersionId={data.datasetVersionId}
+        githubEvents={data.githubEvents}
+        arxivEvents={data.arxivEvents}
+      />
     </div>
   );
 }

@@ -1,6 +1,16 @@
 import Link from "next/link";
+import { unstable_noStore as noStore } from "next/cache";
 
-export function SiteHeader() {
+import { HeaderRefreshButton } from "@/components/header-refresh-button";
+import { prisma } from "@/lib/prisma";
+import { ensureActiveDataset } from "@/lib/seed";
+import { formatRefreshTime } from "@/lib/text";
+
+export async function SiteHeader() {
+  noStore();
+  const activeDataset = await ensureActiveDataset(prisma);
+  const lastUpdatedLabel = activeDataset.publishedAt ? formatRefreshTime(activeDataset.publishedAt) : null;
+
   return (
     <header className="site-header">
       <div className="page-shell site-header__inner">
@@ -21,6 +31,7 @@ export function SiteHeader() {
               >
                 LANCHI SIGNAL
               </span>
+              <span className="brand-lockup__tagline">在变化发生之处，看见人。</span>
             </span>
           </Link>
         </div>
@@ -32,9 +43,7 @@ export function SiteHeader() {
           <Link href="/pipeline" className="primary-button site-nav__button">
             Pipeline
           </Link>
-          <Link href="/admin/refresh" className="primary-button site-nav__button">
-            Refresh
-          </Link>
+          <HeaderRefreshButton lastUpdatedLabel={lastUpdatedLabel} />
         </nav>
       </div>
     </header>

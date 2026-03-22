@@ -19,6 +19,13 @@ export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
   );
   const contactableCount = useMemo(() => entries.filter((entry) => entry.person.links.length > 0).length, [entries]);
 
+  function getPersonMeta(entry: PipelineEntryView) {
+    return [
+      entry.person.organizationNamesRaw?.[0] ?? entry.person.schoolNamesRaw?.[0] ?? entry.person.labNamesRaw?.[0] ?? "",
+      entry.person.email ? `Email: ${entry.person.email}` : "",
+    ].filter(Boolean);
+  }
+
   async function copyText(text: string, successMessage: string) {
     await navigator.clipboard.writeText(text);
     setStatus(successMessage);
@@ -62,101 +69,127 @@ export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
 
       <div className="pipeline-grid">
         <div className="pipeline-list">
-          {entries.map((entry) => (
-            <article
-              key={entry.personStableId}
-              className={`pipeline-card ${selectedEntry?.personStableId === entry.personStableId ? "is-selected" : ""}`}
-            >
-              <button type="button" className="pipeline-card__body" onClick={() => setSelectedId(entry.personStableId)}>
-                <span className="pipeline-card__eyebrow">{entry.timeAgo} 加入</span>
-                <h3>{entry.person.name}</h3>
-                <p>{entry.person.identitySummaryZh}</p>
-                <span>
-                  来源事件：{entry.savedFromEventTitle}
-                </span>
-                <strong>{entry.recentActivitySummaryZh}</strong>
-              </button>
+          {entries.map((entry) => {
+            const personMeta = getPersonMeta(entry);
 
-              <div className="pipeline-card__actions">
-                <button
-                  type="button"
-                  className="ghost-button"
-                  onClick={() => void copyText(entry.copySummaryShortZh ?? "", `已复制 ${entry.person.name}`)}
-                >
-                  复制
+            return (
+              <article
+                key={entry.personStableId}
+                className={`pipeline-card ${selectedEntry?.personStableId === entry.personStableId ? "is-selected" : ""}`}
+              >
+                <button type="button" className="pipeline-card__body" onClick={() => setSelectedId(entry.personStableId)}>
+                  <span className="pipeline-card__eyebrow">{entry.timeAgo} 加入</span>
+                  <h3>{entry.person.name}</h3>
+                  <p>{entry.person.identitySummaryZh}</p>
+                  {personMeta.length > 0 ? (
+                    <div className="person-card__meta-row">
+                      {personMeta.map((item) => (
+                        <span key={`${entry.personStableId}-${item}`} className="person-card__meta-pill">
+                          {item}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  <span>来源事件：{entry.savedFromEventTitle}</span>
+                  <strong>{entry.recentActivitySummaryZh}</strong>
                 </button>
 
-                <details className="contact-menu">
-                  <summary>联系</summary>
-                  <div className="contact-menu__panel">
-                    {entry.person.links.length > 0 ? (
-                      entry.person.links.map((link) => (
-                        <Link key={link.url} href={link.url} target="_blank" rel="noreferrer">
-                          {link.label}
-                        </Link>
-                      ))
-                    ) : (
-                      <span>暂无可用联系渠道</span>
-                    )}
-                  </div>
-                </details>
+                <div className="pipeline-card__actions">
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onClick={() => void copyText(entry.copySummaryShortZh ?? "", `已复制 ${entry.person.name}`)}
+                  >
+                    复制
+                  </button>
 
-                <button type="button" className="ghost-button" onClick={() => setSelectedId(entry.personStableId)}>
-                  详情
-                </button>
-              </div>
-            </article>
-          ))}
+                  <details className="contact-menu">
+                    <summary>联系</summary>
+                    <div className="contact-menu__panel">
+                      {entry.person.links.length > 0 ? (
+                        entry.person.links.map((link) => (
+                          <Link key={link.url} href={link.url} target="_blank" rel="noreferrer">
+                            {link.label}
+                          </Link>
+                        ))
+                      ) : (
+                        <span>暂无可用联系渠道</span>
+                      )}
+                    </div>
+                  </details>
+
+                  <button type="button" className="ghost-button" onClick={() => setSelectedId(entry.personStableId)}>
+                    详情
+                  </button>
+                </div>
+              </article>
+            );
+          })}
         </div>
 
         <aside className="detail-workbench">
           {selectedEntry ? (
-            <>
-              <span className="section-kicker">Selected Person</span>
-              <h3>{selectedEntry.person.name}</h3>
-              <p>{selectedEntry.person.identitySummaryZh}</p>
+            (() => {
+              const personMeta = getPersonMeta(selectedEntry);
 
-              <section className="detail-panel">
-                <h5>来源事件</h5>
-                <p>{selectedEntry.savedFromEventTitle}</p>
-              </section>
+              return (
+                <>
+                  <span className="section-kicker">Selected Person</span>
+                  <h3>{selectedEntry.person.name}</h3>
+                  <p>{selectedEntry.person.identitySummaryZh}</p>
+                  {personMeta.length > 0 ? (
+                    <div className="person-card__meta-row">
+                      {personMeta.map((item) => (
+                        <span key={`${selectedEntry.personStableId}-detail-${item}`} className="person-card__meta-pill">
+                          {item}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
 
-              <section className="detail-panel">
-                <h5>证据</h5>
-                <p>{selectedEntry.person.evidenceSummaryZh}</p>
-              </section>
+                  <section className="detail-panel">
+                    <h5>来源事件</h5>
+                    <p>{selectedEntry.savedFromEventTitle}</p>
+                  </section>
 
-              <section className="detail-panel">
-                <h5>最近活动</h5>
-                <p>{selectedEntry.recentActivitySummaryZh}</p>
-              </section>
+                  <section className="detail-panel">
+                    <h5>证据</h5>
+                    <p>{selectedEntry.person.evidenceSummaryZh}</p>
+                  </section>
 
-              <section className="detail-panel">
-                <h5>联系渠道</h5>
-                <div className="link-list">
-                  {selectedEntry.person.links.length > 0 ? (
-                    selectedEntry.person.links.map((link) => (
-                      <Link key={link.url} href={link.url} target="_blank" rel="noreferrer">
-                        {link.label}
-                      </Link>
-                    ))
-                  ) : (
-                    <span className="empty-state">暂无可用联系渠道</span>
-                  )}
-                </div>
-              </section>
+                  <section className="detail-panel">
+                    <h5>最近活动</h5>
+                    <p>{selectedEntry.recentActivitySummaryZh}</p>
+                  </section>
 
-              <section className="detail-panel">
-                <h5>复制摘要</h5>
-                <button
-                  type="button"
-                  className="primary-button"
-                  onClick={() => void copyText(selectedEntry.copySummaryFullZh ?? "", `已复制 ${selectedEntry.person.name} 的完整摘要`)}
-                >
-                  复制完整摘要
-                </button>
-              </section>
-            </>
+                  <section className="detail-panel">
+                    <h5>联系渠道</h5>
+                    <div className="link-list">
+                      {selectedEntry.person.links.length > 0 ? (
+                        selectedEntry.person.links.map((link) => (
+                          <Link key={link.url} href={link.url} target="_blank" rel="noreferrer">
+                            {link.label}
+                          </Link>
+                        ))
+                      ) : (
+                        <span className="empty-state">暂无可用联系渠道</span>
+                      )}
+                    </div>
+                  </section>
+
+                  <section className="detail-panel">
+                    <h5>复制摘要</h5>
+                    <button
+                      type="button"
+                      className="primary-button"
+                      onClick={() => void copyText(selectedEntry.copySummaryFullZh ?? "", `已复制 ${selectedEntry.person.name} 的完整摘要`)}
+                    >
+                      复制完整摘要
+                    </button>
+                  </section>
+                </>
+              );
+            })()
           ) : (
             <div className="empty-state">尚未保存任何人物。</div>
           )}

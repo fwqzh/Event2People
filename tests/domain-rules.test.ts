@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { buildPersonCopySummary } from "@/lib/copy";
 import { classifyEventTag } from "@/lib/event-tag";
+import { buildGitHubProjectIntroZh, looksLikeMalformedGitHubIntro } from "@/lib/github-copy";
 import { shouldMergePeople } from "@/lib/merge-people";
 import { normalizeEventBatch, normalizePersonBatch } from "@/lib/openai-enrichment";
 import { buildRecentActivitySummary } from "@/lib/pipeline";
@@ -95,6 +96,24 @@ describe("person merge", () => {
 describe("copy and text rules", () => {
   it("keeps Chinese copy fields concise", () => {
     expect(clampZh("这是一个用于验证长度限制是否生效的很长很长的中文句子", 12).length).toBeLessThanOrEqual(12);
+  });
+
+  it("falls back when github intro looks like raw readme content", () => {
+    expect(
+      looksLikeMalformedGitHubIntro(
+        "Protocol Buffers - Google's data interchange format [![OpenSSF Scorecard](https://api.securityscorecards.dev/project...)",
+      ),
+    ).toBe(true);
+
+    expect(
+      buildGitHubProjectIntroZh(
+        {
+          repoDescriptionRaw: "Protocol Buffers - Google's data interchange format",
+          readmeExcerptRaw: "Serialization library",
+        },
+        "Other",
+      ),
+    ).toBe("用于结构化数据序列化与交换");
   });
 
   it("builds person copy summary with source and links", () => {
@@ -262,6 +281,27 @@ describe("openai enrichment normalization", () => {
     expect(result.events[0].eventTitleZh.length).toBeLessThanOrEqual(32);
     expect(result.events[0].eventHighlightZh.length).toBeLessThanOrEqual(20);
     expect((result.events[0].eventDetailSummaryZh ?? "").length).toBeLessThanOrEqual(64);
+  });
+
+  it("rejects malformed github highlight output from model", () => {
+    const dataset = buildSampleDataset();
+    const githubEvent = dataset.events.find((event) => event.sourceType === "github");
+
+    expect(githubEvent).toBeTruthy();
+
+    const result = normalizeEventBatch([githubEvent!], {
+      items: [
+        {
+          stableId: githubEvent!.stableId,
+          eventTitleZh: githubEvent!.eventTitleZh,
+          eventHighlightZh:
+            "Protocol Buffers - Google's data interchange format [![OpenSSF Scorecard](https://api.securityscorecards.dev/project...)",
+          eventDetailSummaryZh: githubEvent!.eventDetailSummaryZh ?? "",
+        },
+      ],
+    });
+
+    expect(result.events[0].eventHighlightZh).toBe(githubEvent!.eventHighlightZh);
   });
 
   it("falls back to existing person copy when AI output is incomplete", () => {

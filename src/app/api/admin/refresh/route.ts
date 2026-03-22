@@ -1,23 +1,29 @@
 import { NextResponse } from "next/server";
 
-import { isAdminAuthorized } from "@/lib/admin-session";
 import { prisma } from "@/lib/prisma";
-import { runRefresh } from "@/lib/refresh";
+import { getRefreshStatus, kickoffRefresh } from "@/lib/refresh";
+
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const runId = searchParams.get("runId");
+  const snapshot = await getRefreshStatus(prisma, runId);
+
+  return NextResponse.json({
+    ok: true,
+    snapshot,
+  });
+}
 
 export async function POST() {
-  const authorized = await isAdminAuthorized();
-
-  if (!authorized) {
-    return NextResponse.json({ error: "未授权" }, { status: 401 });
-  }
-
   try {
-    const run = await runRefresh(prisma, "manual");
+    const result = await kickoffRefresh(prisma, "manual");
 
     return NextResponse.json({
       ok: true,
-      message: run.message ?? "刷新完成",
-      runId: run.id,
+      started: result.started,
+      message: result.started ? "刷新已开始" : "已有刷新任务正在运行",
+      runId: result.run.id,
+      snapshot: result.snapshot,
     });
   } catch (error) {
     return NextResponse.json(

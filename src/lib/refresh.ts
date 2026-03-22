@@ -1,18 +1,28 @@
-import { subDays } from "date-fns";
+import { subDays, subMinutes } from "date-fns";
 import { PrismaClient } from "@prisma/client";
 
 import { classifyEventTag } from "@/lib/event-tag";
+import { buildGitHubProjectIntroZh } from "@/lib/github-copy";
 import { shouldMergePeople } from "@/lib/merge-people";
 import { enrichBundleWithOpenAI } from "@/lib/openai-enrichment";
+import {
+  buildRefreshRangeProgress,
+  buildRefreshStageMessage,
+  getRefreshStageCopy,
+  toRefreshStatusSnapshot,
+} from "@/lib/refresh-progress";
 import { decideRepoPaperLink } from "@/lib/repo-paper-linking";
 import { buildSampleDataset } from "@/lib/sample-data";
 import { persistDataset } from "@/lib/seed";
 import { fetchArxivPapers } from "@/lib/sources/arxiv";
+import { enrichGitHubOwners } from "@/lib/sources/github-people";
 import { fetchGitHubTrendingRepos } from "@/lib/sources/github";
-import { clampZh, repoDisplayName, sentenceZh, slugify, uniqueStrings } from "@/lib/text";
+import { clampZh, formatDay, repoDisplayName, sentenceZh, slugify, uniqueStrings } from "@/lib/text";
 import type { DatasetBundleInput, EventInput, PaperInput, PersonInput, ProjectInput, RepoPaperLinkInput } from "@/lib/types";
 
 const REFRESH_FETCH_LIMIT = 10;
+const STALE_REFRESH_MINUTES = 15;
+const countFormatter = new Intl.NumberFormat("en-US");
 
 function metric(label: string, value: string) {
   return { label, value };
@@ -20,36 +30,6 @@ function metric(label: string, value: string) {
 
 function link(label: string, url: string) {
   return { label, url };
-}
-
-function summarizeGitHubProjectZh(project: ProjectInput, fallbackTag: string) {
-  const text = `${project.repoDescriptionRaw ?? ""} ${project.readmeExcerptRaw ?? ""}`.toLowerCase();
-
-  if (text.includes("browser")) {
-    return sentenceZh("用于浏览器工作流的 agent 执行循环。", 20);
-  }
-
-  if (text.includes("multimodal") || text.includes("vlm")) {
-    return sentenceZh("用于多模态推理与规划的研究栈。", 20);
-  }
-
-  if (text.includes("voice") || text.includes("speech")) {
-    return sentenceZh("用于语音交互与规划的 agent 运行时。", 20);
-  }
-
-  if (text.includes("simulation") || text.includes("world model")) {
-    return sentenceZh("用于具身模拟与 world model 研究。", 20);
-  }
-
-  if (text.includes("eval") || text.includes("benchmark")) {
-    return sentenceZh("用于评测与编排的开源基础设施。", 20);
-  }
-
-  if (text.includes("robot") || text.includes("embodied")) {
-    return sentenceZh("用于具身智能任务执行与规划。", 20);
-  }
-
-  return sentenceZh(`这是一个聚焦 ${fallbackTag} 的 GitHub 项目。`, 20);
 }
 
 function buildRefreshMessage(eventCount: number, options: { aiEnabled: boolean; aiEventCount: number; aiPersonCount: number; aiErrors: string[] }) {
@@ -71,23 +51,6 @@ function buildRefreshMessage(eventCount: number, options: { aiEnabled: boolean; 
   }
 
   return parts.join(" · ");
-}
-
-function personFromGitHubOwner(ownerLogin: string, ownerUrl: string): PersonInput {
-  const displayName = ownerLogin
-    .split(/[-_]/g)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-
-  return {
-    stableId: `github:${ownerLogin.toLowerCase()}`,
-    name: displayName,
-    identitySummaryZh: clampZh("GitHub 构建者 · Frontier repo owner", 36),
-    evidenceSummaryZh: clampZh("创建相关 repo；主导当前事件", 24),
-    sourceUrls: [ownerUrl],
-    githubUrl: ownerUrl,
-    organizationNamesRaw: [],
-  };
 }
 
 function personFromAuthor(name: string): PersonInput {
@@ -144,15 +107,6 @@ function createPaperInputs(arxivPapers: Awaited<ReturnType<typeof fetchArxivPape
     abstractRaw: paper.summary,
     semanticScholarUrl: paper.semanticScholarUrl,
   }));
-}
-
-function buildPeopleInputs(githubProjects: ProjectInput[], papers: PaperInput[]) {
-  return uniqueStrings([...githubProjects.map((project) => project.ownerName), ...papers.flatMap((paper) => paper.authors)]).flatMap(
-    (name) => {
-      const githubProject = githubProjects.find((project) => project.ownerName === name);
-      return githubProject ? [personFromGitHubOwner(githubProject.ownerName, githubProject.ownerUrl)] : [personFromAuthor(name)];
-    },
-  );
 }
 
 function buildRepoPaperLinks(projects: ProjectInput[], papers: PaperInput[]) {
@@ -226,15 +180,15 @@ function buildGitHubEvents(
       eventTag: tag.tag,
       eventTagConfidence: tag.confidence,
       eventTitleZh: clampZh(repoDisplayName(project.repoName), 32),
-      eventHighlightZh: summarizeGitHubProjectZh(project, tag.tag),
+      eventHighlightZh: buildGitHubProjectIntroZh(project, tag.tag),
       eventDetailSummaryZh: linkedPaper
         ? `该项目已与 Paper “${linkedPaper.paperTitle}” 形成明确实现连接。`
         : "该项目近期进入高活跃区间，并已形成清晰人物与来源链接。",
       timePrimary: project.repoUpdatedAt,
       metrics: [
-        metric("时间", "近期"),
+        metric("时间", formatDay(project.repoUpdatedAt)),
         metric("today stars", `+${project.todayStars ?? project.starDelta7d}`),
-        metric("contributors", String(project.contributorsCount)),
+        metric("Total Stars", countFormatter.format(project.stars)),
       ],
       sourceLinks: [link("GitHub", project.repoUrl), ...(linkedPaper ? [link("Paper", linkedPaper.paperUrl)] : [])],
       peopleDetectionStatus: "resolved",
@@ -305,47 +259,135 @@ function buildLiveDatasetBundle(githubProjects: ProjectInput[], papers: PaperInp
   };
 }
 
-export async function runRefresh(prisma: PrismaClient, trigger: "manual" | "scheduled" = "manual") {
+async function recoverStaleRefreshRuns(prisma: PrismaClient) {
+  const staleThreshold = subMinutes(new Date(), STALE_REFRESH_MINUTES);
+
+  await prisma.refreshRun.updateMany({
+    where: {
+      status: "RUNNING",
+      startedAt: {
+        lt: staleThreshold,
+      },
+    },
+    data: {
+      status: "FAILED",
+      finishedAt: new Date(),
+      message: `刷新超过 ${STALE_REFRESH_MINUTES} 分钟未完成，已自动回收`,
+    },
+  });
+}
+
+async function updateRefreshProgress(prisma: PrismaClient, refreshRunId: string, message: string) {
+  await prisma.refreshRun.update({
+    where: { id: refreshRunId },
+    data: { message },
+  });
+}
+
+async function createRefreshRun(prisma: PrismaClient, trigger: "manual" | "scheduled") {
+  await recoverStaleRefreshRuns(prisma);
+
   const running = await prisma.refreshRun.findFirst({
     where: { status: "RUNNING" },
+    orderBy: { startedAt: "desc" },
   });
 
   if (running) {
-    throw new Error("已有刷新任务正在运行");
+    return {
+      run: running,
+      datasetVersionId: null,
+      started: false,
+    };
   }
 
   const refreshRunId = `refresh-${Date.now()}`;
   const datasetVersionId = `dataset-${Date.now()}`;
   const startedAt = new Date();
 
-  await prisma.refreshRun.create({
+  const run = await prisma.refreshRun.create({
     data: {
       id: refreshRunId,
       trigger,
       status: "RUNNING",
       startedAt,
+      message: buildRefreshStageMessage("queued"),
     },
   });
 
+  return {
+    run,
+    datasetVersionId,
+    started: true,
+  };
+}
+
+async function executeRefreshRun(prisma: PrismaClient, refreshRunId: string, datasetVersionId: string) {
   try {
+    await updateRefreshProgress(prisma, refreshRunId, buildRefreshStageMessage("ingest"));
+
     const [githubRepos, arxivPapers] = await Promise.all([
       fetchGitHubTrendingRepos(REFRESH_FETCH_LIMIT),
       fetchArxivPapers(REFRESH_FETCH_LIMIT),
     ]);
+
+    await updateRefreshProgress(prisma, refreshRunId, buildRefreshStageMessage("normalize"));
+
     const githubProjects = createProjectInputs(githubRepos);
     const papers = createPaperInputs(arxivPapers);
-    const people = buildPeopleInputs(githubProjects, papers);
+    const ownerCount = new Set(githubProjects.map((project) => project.ownerName)).size;
+
+    await updateRefreshProgress(
+      prisma,
+      refreshRunId,
+      buildRefreshStageMessage("people", ownerCount > 0 ? `0/${ownerCount}` : undefined),
+    );
+
+    const people = await (async () => {
+      const githubOwners = await enrichGitHubOwners(githubProjects, async ({ completed, total }) => {
+        const progress = buildRefreshRangeProgress(getRefreshStageCopy("people").progress, 58, completed, total);
+        await updateRefreshProgress(
+          prisma,
+          refreshRunId,
+          buildRefreshStageMessage("people", `${completed}/${total}`).replace("progress::40", `progress::${progress}`),
+        );
+      });
+      const githubOwnerIds = new Set(githubOwners.map((person) => person.stableId));
+      const authorPeople = uniqueStrings(papers.flatMap((paper) => paper.authors))
+        .map((name) => personFromAuthor(name))
+        .filter((person) => !githubOwnerIds.has(person.stableId));
+
+      return [...githubOwners, ...authorPeople];
+    })();
+
+    await updateRefreshProgress(prisma, refreshRunId, buildRefreshStageMessage("link"));
     const repoPaperLinks = buildRepoPaperLinks(githubProjects, papers);
 
     const bundle =
       githubProjects.length > 0 || papers.length > 0
         ? buildLiveDatasetBundle(githubProjects, papers, people, repoPaperLinks)
         : buildSampleDataset();
-    const aiResult = await enrichBundleWithOpenAI(bundle);
+
+    await updateRefreshProgress(prisma, refreshRunId, buildRefreshStageMessage("ai"));
+
+    const aiResult = await enrichBundleWithOpenAI(bundle, {
+      onProgress: async ({ phase, completedItems, totalItems }) => {
+        const progress = phase === "events"
+          ? buildRefreshRangeProgress(getRefreshStageCopy("ai").progress, 84, completedItems, totalItems)
+          : buildRefreshRangeProgress(84, 89, completedItems, totalItems);
+        const detail = phase === "events" ? `events ${completedItems}/${totalItems}` : `people ${completedItems}/${totalItems}`;
+        await updateRefreshProgress(
+          prisma,
+          refreshRunId,
+          buildRefreshStageMessage("ai", detail).replace(`progress::${getRefreshStageCopy("ai").progress}`, `progress::${progress}`),
+        );
+      },
+    });
 
     if (aiResult.errors.length > 0) {
       console.warn("OpenAI enrichment fallback:", aiResult.errors.join(" | "));
     }
+
+    await updateRefreshProgress(prisma, refreshRunId, buildRefreshStageMessage("validate"));
 
     await prisma.$transaction(async (tx) => {
       await tx.datasetVersion.create({
@@ -358,6 +400,13 @@ export async function runRefresh(prisma: PrismaClient, trigger: "manual" | "sche
       });
 
       await persistDataset(tx, datasetVersionId, aiResult.bundle);
+
+      await tx.refreshRun.update({
+        where: { id: refreshRunId },
+        data: {
+          message: buildRefreshStageMessage("publish"),
+        },
+      });
 
       await tx.datasetVersion.updateMany({
         where: { status: "ACTIVE" },
@@ -403,6 +452,46 @@ export async function runRefresh(prisma: PrismaClient, trigger: "manual" | "sche
 
     throw error;
   }
+}
+
+export async function runRefresh(prisma: PrismaClient, trigger: "manual" | "scheduled" = "manual") {
+  const created = await createRefreshRun(prisma, trigger);
+
+  if (!created.started || !created.datasetVersionId) {
+    throw new Error("已有刷新任务正在运行");
+  }
+
+  return executeRefreshRun(prisma, created.run.id, created.datasetVersionId);
+}
+
+export async function kickoffRefresh(prisma: PrismaClient, trigger: "manual" | "scheduled" = "manual") {
+  const created = await createRefreshRun(prisma, trigger);
+
+  if (created.started && created.datasetVersionId) {
+    setTimeout(() => {
+      void executeRefreshRun(prisma, created.run.id, created.datasetVersionId!).catch((error) => {
+        console.warn("background refresh failed:", error instanceof Error ? error.message : "unknown error");
+      });
+    }, 0);
+  }
+
+  return {
+    run: created.run,
+    started: created.started,
+    snapshot: toRefreshStatusSnapshot(created.run),
+  };
+}
+
+export async function getRefreshStatus(prisma: PrismaClient, runId?: string | null) {
+  const run = runId
+    ? await prisma.refreshRun.findUnique({
+        where: { id: runId },
+      })
+    : await prisma.refreshRun.findFirst({
+        orderBy: { startedAt: "desc" },
+      });
+
+  return run ? toRefreshStatusSnapshot(run) : null;
 }
 
 export { buildLiveDatasetBundle };

@@ -1,4 +1,4 @@
-import { formatDistanceToNow } from "date-fns";
+import { format, formatDistanceToNow } from "date-fns";
 import { zhCN } from "date-fns/locale";
 
 export function clampZh(text: string, limit: number) {
@@ -9,6 +9,33 @@ export function clampZh(text: string, limit: number) {
   }
 
   return `${trimmed.slice(0, Math.max(0, limit - 1)).trim()}…`;
+}
+
+export function clampPlainText(text: string, limit: number) {
+  const trimmed = text.replace(/\s+/g, " ").trim();
+
+  if (trimmed.length <= limit) {
+    return trimmed;
+  }
+
+  const sliced = trimmed.slice(0, limit).trimEnd();
+  const breakpoint = Math.max(
+    sliced.lastIndexOf(" "),
+    sliced.lastIndexOf("。"),
+    sliced.lastIndexOf("，"),
+    sliced.lastIndexOf("；"),
+    sliced.lastIndexOf("、"),
+    sliced.lastIndexOf("."),
+    sliced.lastIndexOf(","),
+    sliced.lastIndexOf(";"),
+    sliced.lastIndexOf(":"),
+  );
+
+  if (breakpoint >= Math.floor(limit * 0.7)) {
+    return sliced.slice(0, breakpoint).trimEnd();
+  }
+
+  return sliced;
 }
 
 export function sentenceZh(text: string, limit: number) {
@@ -33,6 +60,14 @@ export function timeAgo(date: Date) {
     addSuffix: true,
     locale: zhCN,
   });
+}
+
+export function formatDay(date: Date) {
+  return format(date, "yyyy-MM-dd");
+}
+
+export function formatRefreshTime(date: Date) {
+  return format(date, "MM-dd HH:mm");
 }
 
 export function compactInstitution(value: string | null | undefined) {

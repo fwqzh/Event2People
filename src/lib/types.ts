@@ -131,14 +131,25 @@ export type PersonView = PersonInput & {
   links: LinkItem[];
 };
 
-export type EventView = EventInput & {
+export type PersonPreviewView = {
+  stableId: string;
+  name: string;
+  primaryLinkUrl: string | null;
+};
+
+export type EventSummaryView = EventInput & {
   timeAgo: string;
-  people: PersonView[];
-  projects: ProjectInput[];
-  papers: PaperInput[];
+  cardTitle: string;
+  previewPeople: PersonPreviewView[];
+  peopleCount: number;
   isSaved: boolean;
-  sourceSummaryLabel: string;
   cardSummary: string;
+};
+
+export type EventDetailView = {
+  stableId: string;
+  people: PersonView[];
+  sourceSummaryLabel: string;
   detailSummary: string;
   introSummary: string;
 };

@@ -227,7 +227,7 @@ export function buildSampleDataset(now = new Date()): DatasetBundleInput {
       metrics: metrics([
         ["时间", "6 小时前"],
         ["today stars", "+312"],
-        ["contributors", "8"],
+        ["Total Stars", "1280"],
       ]),
       sourceLinks: links([
         ["GitHub", "https://github.com/alice-chen/vox-agent"],
@@ -253,7 +253,7 @@ export function buildSampleDataset(now = new Date()): DatasetBundleInput {
       metrics: metrics([
         ["时间", "10 小时前"],
         ["today stars", "+420"],
-        ["contributors", "14"],
+        ["Total Stars", "2310"],
       ]),
       sourceLinks: links([["GitHub", "https://github.com/marvinli/omnireason"]]),
       peopleDetectionStatus: "resolved",
@@ -276,7 +276,7 @@ export function buildSampleDataset(now = new Date()): DatasetBundleInput {
       metrics: metrics([
         ["时间", "14 小时前"],
         ["today stars", "+288"],
-        ["contributors", "5"],
+        ["Total Stars", "980"],
       ]),
       sourceLinks: links([["GitHub", "https://github.com/rinapark/browserloop"]]),
       peopleDetectionStatus: "resolved",
@@ -299,7 +299,7 @@ export function buildSampleDataset(now = new Date()): DatasetBundleInput {
       metrics: metrics([
         ["时间", "20 小时前"],
         ["related repos", "3"],
-        ["contributors", "30"],
+        ["Total Stars", "4732"],
       ]),
       sourceLinks: links([
         ["StreamForge", "https://github.com/noahkim/streamforge"],
@@ -326,7 +326,7 @@ export function buildSampleDataset(now = new Date()): DatasetBundleInput {
       metrics: metrics([
         ["时间", "1 天前"],
         ["today stars", "+256"],
-        ["contributors", "13"],
+        ["Total Stars", "1788"],
       ]),
       sourceLinks: links([["GitHub", "https://github.com/openvision/worldforge"]]),
       peopleDetectionStatus: "missing",
@@ -349,7 +349,7 @@ export function buildSampleDataset(now = new Date()): DatasetBundleInput {
       metrics: metrics([
         ["时间", "1 天前"],
         ["today stars", "+176"],
-        ["contributors", "6"],
+        ["Total Stars", "842"],
       ]),
       sourceLinks: links([
         ["GitHub", "https://github.com/audio-lab/voice-weaver"],
@@ -483,7 +483,7 @@ export function buildSampleDataset(now = new Date()): DatasetBundleInput {
       metrics: metrics([
         ["时间", `${1 + Math.floor(index / 4)} 天前`],
         ["today stars", `+${80 + index * 12}`],
-        ["contributors", `${3 + (index % 6)}`],
+        ["Total Stars", `${900 + index * 140}`],
       ]),
       sourceLinks: links([["GitHub", `https://github.com/example/event-${index}`]]),
       peopleDetectionStatus: index % 4 === 0 ? "missing" : "partial",

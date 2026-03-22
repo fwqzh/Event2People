@@ -3,6 +3,7 @@ import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 
 import { env, hasOpenAiKey } from "@/lib/env";
+import { looksLikeMalformedGitHubIntro } from "@/lib/github-copy";
 import { clampZh, repoDisplayName, sentenceZh } from "@/lib/text";
 import type { DatasetBundleInput, EventInput, PersonInput } from "@/lib/types";
 
@@ -46,6 +47,14 @@ export type AiEnrichmentResult = {
   eventCount: number;
   personCount: number;
   errors: string[];
+};
+
+type AiEnrichmentProgress = {
+  phase: "events" | "people";
+  completedBatches: number;
+  totalBatches: number;
+  completedItems: number;
+  totalItems: number;
 };
 
 let clientSingleton: OpenAI | null | undefined;
@@ -151,10 +160,16 @@ function normalizeEventBatch(events: EventInput[], output: EventBatchOutput) {
       return event;
     }
 
+    const normalizedHighlightCandidate = pickNonEmpty(generated.eventHighlightZh, event.eventHighlightZh);
+    const safeHighlight =
+      event.sourceType === "github" && looksLikeMalformedGitHubIntro(normalizedHighlightCandidate)
+        ? event.eventHighlightZh
+        : normalizedHighlightCandidate;
+
     const nextEvent: EventInput = {
       ...event,
       eventTitleZh: clampZh(pickNonEmpty(generated.eventTitleZh, event.eventTitleZh), EVENT_TITLE_LIMIT),
-      eventHighlightZh: sentenceZh(pickNonEmpty(generated.eventHighlightZh, event.eventHighlightZh), EVENT_HIGHLIGHT_LIMIT),
+      eventHighlightZh: sentenceZh(safeHighlight, EVENT_HIGHLIGHT_LIMIT),
       eventDetailSummaryZh: clampZh(
         pickNonEmpty(generated.eventDetailSummaryZh ?? event.eventDetailSummaryZh ?? "", event.eventDetailSummaryZh ?? ""),
         EVENT_DETAIL_LIMIT,
@@ -315,6 +330,7 @@ function buildPersonFacts(people: PersonInput[], bundle: DatasetBundleInput) {
         linkedinUrl: person.linkedinUrl ?? "",
         xUrl: person.xUrl ?? "",
         homepageUrl: person.homepageUrl ?? "",
+        email: person.email ?? "",
       },
       organizations: person.organizationNamesRaw ?? [],
       schools: person.schoolNamesRaw ?? [],
@@ -502,7 +518,12 @@ async function enrichPersonBatch(client: OpenAI, people: PersonInput[], bundle: 
   return normalizePersonBatch(people, response.output_parsed ?? { items: [] });
 }
 
-export async function enrichBundleWithOpenAI(bundle: DatasetBundleInput): Promise<AiEnrichmentResult> {
+export async function enrichBundleWithOpenAI(
+  bundle: DatasetBundleInput,
+  options?: {
+    onProgress?: (progress: AiEnrichmentProgress) => void | Promise<void>;
+  },
+): Promise<AiEnrichmentResult> {
   const client = getClient();
 
   if (!client) {
@@ -521,9 +542,14 @@ export async function enrichBundleWithOpenAI(bundle: DatasetBundleInput): Promis
   let people = bundle.people;
   let eventCount = 0;
   let personCount = 0;
+  const eventBatches = chunk(events, EVENT_BATCH_SIZE);
+  const personBatches = chunk(people, PERSON_BATCH_SIZE);
 
   try {
-    for (const eventBatch of chunk(events, EVENT_BATCH_SIZE)) {
+    let completedBatches = 0;
+    let completedItems = 0;
+
+    for (const eventBatch of eventBatches) {
       const result = await enrichEventBatch(client, eventBatch, {
         ...bundle,
         events,
@@ -532,13 +558,25 @@ export async function enrichBundleWithOpenAI(bundle: DatasetBundleInput): Promis
       const nextByStableId = new Map(result.events.map((event) => [event.stableId, event]));
       events = events.map((event) => nextByStableId.get(event.stableId) ?? event);
       eventCount += result.enrichedCount;
+      completedBatches += 1;
+      completedItems += eventBatch.length;
+      await options?.onProgress?.({
+        phase: "events",
+        completedBatches,
+        totalBatches: eventBatches.length,
+        completedItems,
+        totalItems: bundle.events.length,
+      });
     }
   } catch (error) {
     errors.push(error instanceof Error ? error.message : "event enrichment failed");
   }
 
   try {
-    for (const personBatch of chunk(people, PERSON_BATCH_SIZE)) {
+    let completedBatches = 0;
+    let completedItems = 0;
+
+    for (const personBatch of personBatches) {
       const result = await enrichPersonBatch(client, personBatch, {
         ...bundle,
         events,
@@ -547,6 +585,15 @@ export async function enrichBundleWithOpenAI(bundle: DatasetBundleInput): Promis
       const nextByStableId = new Map(result.people.map((person) => [person.stableId, person]));
       people = people.map((person) => nextByStableId.get(person.stableId) ?? person);
       personCount += result.enrichedCount;
+      completedBatches += 1;
+      completedItems += personBatch.length;
+      await options?.onProgress?.({
+        phase: "people",
+        completedBatches,
+        totalBatches: personBatches.length,
+        completedItems,
+        totalItems: bundle.people.length,
+      });
     }
   } catch (error) {
     errors.push(error instanceof Error ? error.message : "person enrichment failed");

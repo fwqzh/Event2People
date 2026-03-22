@@ -1,10 +1,12 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
+
+import { decodeRefreshProgress } from "@/lib/refresh-progress";
+import type { RefreshStatusSnapshot } from "@/lib/refresh-progress";
 
 type AdminRefreshPanelProps = {
-  authorized: boolean;
   aiEnabled: boolean;
   aiModel: string | null;
   runs: Array<{
@@ -17,10 +19,12 @@ type AdminRefreshPanelProps = {
   }>;
 };
 
-export function AdminRefreshPanel({ authorized, aiEnabled, aiModel, runs }: AdminRefreshPanelProps) {
+export function AdminRefreshPanel({ aiEnabled, aiModel, runs }: AdminRefreshPanelProps) {
   const router = useRouter();
+  const pollTimerRef = useRef<number | null>(null);
   const [isPending, startTransition] = useTransition();
-  const [secret, setSecret] = useState("");
+  const [snapshot, setSnapshot] = useState<RefreshStatusSnapshot | null>(null);
+  const [isPolling, setIsPolling] = useState(false);
   const [status, setStatus] = useState("");
 
   function refreshPage() {
@@ -29,28 +33,88 @@ export function AdminRefreshPanel({ authorized, aiEnabled, aiModel, runs }: Admi
     });
   }
 
-  async function handleLogin() {
-    setStatus("");
-    const response = await fetch("/api/admin/session", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ secret }),
+  function stopPolling() {
+    if (pollTimerRef.current !== null) {
+      window.clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+    setIsPolling(false);
+  }
+
+  async function fetchSnapshot(runId?: string | null) {
+    const search = runId ? `?runId=${encodeURIComponent(runId)}` : "";
+    const response = await fetch(`/api/admin/refresh${search}`, {
+      method: "GET",
+      cache: "no-store",
     });
     const payload = await response.json();
+    return (payload.snapshot as RefreshStatusSnapshot | null) ?? null;
+  }
 
-    if (!response.ok) {
-      setStatus(payload.error ?? "鉴权失败");
+  function schedulePoll(runId?: string | null) {
+    stopPolling();
+    setIsPolling(true);
+
+    const tick = async () => {
+      try {
+        const nextSnapshot = await fetchSnapshot(runId);
+        setSnapshot(nextSnapshot);
+
+        if (!nextSnapshot || nextSnapshot.status !== "RUNNING") {
+          stopPolling();
+          if (nextSnapshot?.label) {
+            setStatus(nextSnapshot.label);
+          }
+          if (nextSnapshot?.status === "SUCCESS") {
+            refreshPage();
+          }
+          return;
+        }
+
+        pollTimerRef.current = window.setTimeout(() => {
+          void tick();
+        }, 1500);
+      } catch (error) {
+        stopPolling();
+        setStatus(error instanceof Error ? error.message : "刷新状态获取失败");
+      }
+    };
+
+    void tick();
+  }
+
+  /* eslint-disable react-hooks/exhaustive-deps */
+  useEffect(() => {
+    void (async () => {
+      try {
+        const latestSnapshot = await fetchSnapshot();
+        setSnapshot(latestSnapshot);
+        if (latestSnapshot?.status === "RUNNING") {
+          schedulePoll(latestSnapshot.runId);
+        }
+      } catch {
+        return;
+      }
+    })();
+
+    return () => {
+      stopPolling();
+    };
+  }, []);
+  /* eslint-enable react-hooks/exhaustive-deps */
+
+  async function handleRefresh() {
+    if (isPolling || snapshot?.status === "RUNNING") {
+      if (snapshot?.runId) {
+        schedulePoll(snapshot.runId);
+      }
       return;
     }
 
-    setStatus("鉴权成功");
-    refreshPage();
-  }
-
-  async function handleRefresh() {
     setStatus("");
     const response = await fetch("/api/admin/refresh", {
       method: "POST",
+      cache: "no-store",
     });
     const payload = await response.json();
 
@@ -59,27 +123,22 @@ export function AdminRefreshPanel({ authorized, aiEnabled, aiModel, runs }: Admi
       return;
     }
 
-    setStatus(payload.message ?? "刷新完成");
+    const nextSnapshot = (payload.snapshot as RefreshStatusSnapshot | null) ?? null;
+    setSnapshot(nextSnapshot);
+    setStatus(payload.message ?? "刷新已开始");
+
+    if (nextSnapshot?.status === "RUNNING") {
+      schedulePoll(nextSnapshot.runId);
+      return;
+    }
+
+    if (nextSnapshot?.label) {
+      setStatus(nextSnapshot.label);
+    }
     refreshPage();
   }
 
-  if (!authorized) {
-    return (
-      <div className="admin-card">
-        <span className="section-kicker">PROTECTED</span>
-        <h2>Admin Refresh</h2>
-        <p>输入 `ADMIN_REFRESH_SECRET` 后才能触发刷新任务。</p>
-        <p>{aiEnabled ? `OpenAI 已配置，模型：${aiModel}` : "未配置 OPENAI_API_KEY，将仅使用模板文案。"}</p>
-        <div className="admin-form">
-          <input value={secret} onChange={(event) => setSecret(event.target.value)} placeholder="输入刷新密钥" type="password" />
-          <button type="button" className="primary-button" onClick={() => void handleLogin()}>
-            登录
-          </button>
-        </div>
-        {status ? <p className="status-text">{status}</p> : null}
-      </div>
-    );
-  }
+  const isRefreshing = isPolling || snapshot?.status === "RUNNING";
 
   return (
     <div className="admin-card">
@@ -88,10 +147,12 @@ export function AdminRefreshPanel({ authorized, aiEnabled, aiModel, runs }: Admi
           <span className="section-kicker">DATA OPS</span>
           <h2>Refresh Dataset</h2>
           <p>手动触发 ingest → parse → normalize → link → enrich → validate → publish。</p>
+          <p>后台已配置为每 60 分钟自动刷新一次。</p>
           <p>{aiEnabled ? `OpenAI enrichment 已启用：${aiModel}` : "当前未配置 OPENAI_API_KEY，刷新会回退到模板文案。"}</p>
+          {isRefreshing && snapshot ? <p>当前进度：{snapshot.label}</p> : null}
         </div>
-        <button type="button" className="primary-button" disabled={isPending} onClick={() => void handleRefresh()}>
-          {isPending ? "刷新中…" : "立即刷新"}
+        <button type="button" className="primary-button" disabled={isPending || isRefreshing} onClick={() => void handleRefresh()}>
+          {isRefreshing || isPending ? "刷新中…" : "立即刷新"}
         </button>
       </div>
 
@@ -102,7 +163,7 @@ export function AdminRefreshPanel({ authorized, aiEnabled, aiModel, runs }: Admi
               <strong>{run.status}</strong>
               <p>{run.trigger}</p>
             </div>
-            <span>{run.message ?? "无附加信息"}</span>
+            <span>{decodeRefreshProgress(run.message, run.status as "RUNNING" | "SUCCESS" | "FAILED").label}</span>
           </article>
         ))}
       </div>

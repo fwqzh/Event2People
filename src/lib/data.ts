@@ -1,10 +1,16 @@
 import { Prisma } from "@prisma/client";
 
 import { buildPersonCopySummary } from "@/lib/copy";
+import {
+  buildGitHubCardSummaryZh,
+  buildGitHubExpandedIntroZh,
+  buildGitHubProjectIntroZh,
+  looksLikeMalformedGitHubIntro,
+} from "@/lib/github-copy";
 import { prisma } from "@/lib/prisma";
 import { ensureActiveDataset, parseLinks, parseMetrics } from "@/lib/seed";
-import { timeAgo } from "@/lib/text";
-import type { EventView, LinkItem, PersonView, PipelineEntryView } from "@/lib/types";
+import { clampPlainText, timeAgo } from "@/lib/text";
+import type { EventDetailView, EventSummaryView, LinkItem, PersonPreviewView, PersonView, PipelineEntryView } from "@/lib/types";
 
 type PersonRecord = {
   stableId: string;
@@ -58,8 +64,61 @@ type PersonLinkRecord = Pick<
   "githubUrl" | "scholarUrl" | "linkedinUrl" | "xUrl" | "homepageUrl" | "email" | "sourceUrlsJson"
 >;
 
+type HomepageEventRecord = Prisma.EventGetPayload<{
+  include: {
+    projectLinks: {
+      include: {
+        project: true;
+      };
+    };
+    paperLinks: {
+      include: {
+        paper: true;
+      };
+    };
+    personLinks: {
+      include: {
+        person: {
+          select: {
+            stableId: true;
+            name: true;
+            githubUrl: true;
+            scholarUrl: true;
+            linkedinUrl: true;
+            xUrl: true;
+            homepageUrl: true;
+            email: true;
+            sourceUrlsJson: true;
+          };
+        };
+      };
+    };
+  };
+}>;
+
+type ActiveEventRecord = Prisma.EventGetPayload<{
+  include: {
+    personLinks: {
+      include: {
+        person: true;
+      };
+    };
+    projectLinks: {
+      include: {
+        project: true;
+      };
+    };
+    paperLinks: {
+      include: {
+        paper: true;
+      };
+    };
+  };
+}>;
+
 const CARD_SOURCE_SUMMARY_LIMIT = 220;
 const DETAIL_SOURCE_SUMMARY_LIMIT = 560;
+const countFormatter = new Intl.NumberFormat("en-US");
 
 const PERSON_LINK_BUILDERS = [
   { label: "GitHub", getUrl: (person: PersonLinkRecord) => person.githubUrl },
@@ -78,14 +137,36 @@ function readStringList(value: Prisma.JsonValue | null | undefined) {
   return value.filter((item): item is string => typeof item === "string");
 }
 
-function normalizeHomepageMetrics(sourceType: "github" | "arxiv", metrics: Array<{ label: string; value: string }>) {
+function normalizeHomepageMetrics(
+  sourceType: "github" | "arxiv",
+  metrics: Array<{ label: string; value: string }>,
+  projects: ProjectRecord[] = [],
+) {
   if (sourceType !== "github") {
     return metrics;
   }
 
+  const totalStars = projects.reduce((sum, project) => sum + project.stars, 0);
+
   return metrics.map((metric) => {
     if (metric.label !== "stars 增量") {
-      return metric;
+      if (metric.label === "Total Stars") {
+        const rawValue = metric.value.replace(/,/g, "").match(/\d+/)?.[0];
+
+        return {
+          label: "Total Stars",
+          value: rawValue ? countFormatter.format(Number(rawValue)) : metric.value,
+        };
+      }
+
+      if (metric.label !== "contributors") {
+        return metric;
+      }
+
+      return {
+        label: "Total Stars",
+        value: totalStars > 0 ? countFormatter.format(totalStars) : metric.value,
+      };
     }
 
     return {
@@ -111,11 +192,7 @@ function compactCopy(value: string | null | undefined) {
 }
 
 function clampCopy(text: string, limit: number) {
-  if (text.length <= limit) {
-    return text;
-  }
-
-  return `${text.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
+  return clampPlainText(text, limit);
 }
 
 function uniqueCopyParts(values: Array<string | null | undefined>) {
@@ -133,23 +210,35 @@ function uniqueCopyParts(values: Array<string | null | undefined>) {
     });
 }
 
-function getSourceSummaryLabel(sourceType: EventView["sourceType"]) {
+function getSourceSummaryLabel(sourceType: "github" | "arxiv") {
   return sourceType === "github" ? "项目简介" : "论文简介";
 }
 
 function buildSourceSummary(
-  sourceType: EventView["sourceType"],
-  project: EventView["projects"][number] | undefined,
-  paper: EventView["papers"][number] | undefined,
+  sourceType: "github" | "arxiv",
+  project: ProjectRecord | undefined,
+  paper: PaperRecord | undefined,
   fallback: string,
   limit: number,
 ) {
   const summary =
     sourceType === "github"
-      ? uniqueCopyParts([project?.repoDescriptionRaw, project?.readmeExcerptRaw]).join(" ")
+      ? uniqueCopyParts([project?.repoDescriptionRaw]).join(" ")
       : uniqueCopyParts([paper?.abstractRaw]).join(" ");
 
   return clampCopy(summary || fallback, limit);
+}
+
+function normalizeGitHubHighlight(
+  highlight: string,
+  project: ProjectRecord | undefined,
+  fallbackTag: EventSummaryView["eventTag"],
+) {
+  if (looksLikeMalformedGitHubIntro(highlight)) {
+    return buildGitHubProjectIntroZh(project ?? {}, fallbackTag);
+  }
+
+  return compactCopy(highlight);
 }
 
 function linksForPerson(person: PersonLinkRecord) {
@@ -166,38 +255,6 @@ function linksForPerson(person: PersonLinkRecord) {
     label: url.includes("github.com") ? "GitHub" : "外链",
     url,
   }));
-}
-
-function mapProject(project: ProjectRecord): EventView["projects"][number] {
-  return {
-    stableId: project.stableId,
-    repoName: project.repoName,
-    repoUrl: project.repoUrl,
-    ownerName: project.ownerName,
-    ownerUrl: project.ownerUrl,
-    stars: project.stars,
-    starDelta7d: project.starDelta7d,
-    contributorsCount: project.contributorsCount,
-    repoCreatedAt: project.repoCreatedAt,
-    repoUpdatedAt: project.repoUpdatedAt,
-    repoDescriptionRaw: project.repoDescriptionRaw,
-    readmeExcerptRaw: project.readmeExcerptRaw,
-    relatedPaperStableIds: readStringList(project.relatedPaperIdsJson),
-  };
-}
-
-function mapPaper(paper: PaperRecord): EventView["papers"][number] {
-  return {
-    stableId: paper.stableId,
-    paperTitle: paper.paperTitle,
-    paperUrl: paper.paperUrl,
-    authors: readStringList(paper.authorsJson),
-    authorsCount: paper.authorsCount,
-    publishedAt: paper.publishedAt,
-    abstractRaw: paper.abstractRaw,
-    codeUrl: paper.codeUrl,
-    relatedProjectStableIds: readStringList(paper.relatedProjectIds),
-  };
 }
 
 function mapPerson(person: PersonRecord): PersonView {
@@ -219,6 +276,106 @@ function mapPerson(person: PersonRecord): PersonView {
     bioSnippetsRaw: readStringList(person.bioSnippetsRaw),
     founderHistoryRaw: readStringList(person.founderHistoryRaw),
     links: linksForPerson(person),
+  };
+}
+
+function mapPersonPreview(person: PersonLinkRecord & Pick<PersonRecord, "stableId" | "name">): PersonPreviewView {
+  return {
+    stableId: person.stableId,
+    name: person.name,
+    primaryLinkUrl: linksForPerson(person)[0]?.url ?? null,
+  };
+}
+
+function mapEventSummary(
+  event: HomepageEventRecord,
+  savedPeople: Set<string>,
+): EventSummaryView {
+  const projects = event.projectLinks.map((link) => link.project);
+  const papers = event.paperLinks.map((link) => link.paper);
+  const safeHighlight =
+    event.sourceType === "github"
+      ? normalizeGitHubHighlight(event.eventHighlightZh, projects[0], event.eventTag as EventSummaryView["eventTag"])
+      : event.eventHighlightZh;
+  const cardSummary =
+    event.sourceType === "github"
+      ? buildGitHubCardSummaryZh({
+          repoName: projects[0]?.repoName ?? event.eventTitleZh,
+          repoDescriptionRaw: projects[0]?.repoDescriptionRaw,
+          readmeExcerptRaw: projects[0]?.readmeExcerptRaw,
+          highlight: safeHighlight,
+        })
+      : buildSourceSummary(event.sourceType, projects[0], papers[0], safeHighlight, CARD_SOURCE_SUMMARY_LIMIT);
+
+  return {
+    stableId: event.stableId,
+    sourceType: event.sourceType,
+    eventType: event.eventType,
+    eventTag: event.eventTag as EventSummaryView["eventTag"],
+    eventTagConfidence: event.eventTagConfidence,
+    eventTitleZh: event.eventTitleZh,
+    eventHighlightZh: safeHighlight,
+    eventDetailSummaryZh: event.eventDetailSummaryZh,
+    timePrimary: event.timePrimary,
+    metrics: normalizeHomepageMetrics(event.sourceType, parseMetrics(event.metricsJson), projects),
+    sourceLinks: parseLinks(event.sourceLinksJson),
+    peopleDetectionStatus: event.peopleDetectionStatus,
+    projectStableIds: event.projectLinks.map((link) => link.project.stableId),
+    paperStableIds: event.paperLinks.map((link) => link.paper.stableId),
+    personStableIds: event.personLinks.map((link) => link.person.stableId),
+    displayRank: event.displayRank,
+    relatedRepoCount: event.relatedRepoCount,
+    relatedPaperCount: event.relatedPaperCount,
+    timeAgo: timeAgo(event.timePrimary),
+    cardTitle: event.sourceType === "arxiv" ? papers[0]?.paperTitle ?? event.eventTitleZh : event.eventTitleZh,
+    previewPeople: event.personLinks.slice(0, 3).map((link) => mapPersonPreview(link.person)),
+    peopleCount: event.personLinks.length,
+    isSaved: event.personLinks.some((link) => savedPeople.has(link.person.stableId)),
+    cardSummary,
+  };
+}
+
+function mapEventDetail(
+  event: ActiveEventRecord,
+): EventDetailView {
+  const projects = event.projectLinks.map((link) => link.project);
+  const papers = event.paperLinks.map((link) => link.paper);
+  const safeHighlight =
+    event.sourceType === "github"
+      ? normalizeGitHubHighlight(event.eventHighlightZh, projects[0], event.eventTag as EventSummaryView["eventTag"])
+      : event.eventHighlightZh;
+  const detailSummary = buildSourceSummary(
+    event.sourceType,
+    projects[0],
+    papers[0],
+    safeHighlight,
+    DETAIL_SOURCE_SUMMARY_LIMIT,
+  );
+  const cardSummary =
+    event.sourceType === "github"
+      ? buildGitHubCardSummaryZh({
+          repoName: projects[0]?.repoName ?? event.eventTitleZh,
+          repoDescriptionRaw: projects[0]?.repoDescriptionRaw,
+          readmeExcerptRaw: projects[0]?.readmeExcerptRaw,
+          highlight: safeHighlight,
+        })
+      : buildSourceSummary(event.sourceType, projects[0], papers[0], safeHighlight, CARD_SOURCE_SUMMARY_LIMIT);
+
+  return {
+    stableId: event.stableId,
+    people: event.personLinks.map((link) => mapPerson(link.person)),
+    sourceSummaryLabel: getSourceSummaryLabel(event.sourceType),
+    detailSummary,
+    introSummary:
+      event.sourceType === "github"
+        ? buildGitHubExpandedIntroZh({
+            repoName: projects[0]?.repoName ?? event.eventTitleZh,
+            repoDescriptionRaw: projects[0]?.repoDescriptionRaw,
+            readmeExcerptRaw: projects[0]?.readmeExcerptRaw,
+            highlight: safeHighlight,
+            cardSummary,
+          })
+        : detailSummary,
   };
 }
 
@@ -246,54 +403,26 @@ export async function getHomepageData() {
       },
       personLinks: {
         include: {
-          person: true,
+          person: {
+            select: {
+              stableId: true,
+              name: true,
+              githubUrl: true,
+              scholarUrl: true,
+              linkedinUrl: true,
+              xUrl: true,
+              homepageUrl: true,
+              email: true,
+              sourceUrlsJson: true,
+            },
+          },
         },
       },
     },
     orderBy: [{ sourceType: "asc" }, { displayRank: "asc" }],
   });
 
-  const mappedEvents: EventView[] = events.map((event) => {
-    const projects = event.projectLinks.map((link) => mapProject(link.project));
-    const papers = event.paperLinks.map((link) => mapPaper(link.paper));
-    const detailSummary = buildSourceSummary(
-      event.sourceType,
-      projects[0],
-      papers[0],
-      event.eventHighlightZh,
-      DETAIL_SOURCE_SUMMARY_LIMIT,
-    );
-
-    return {
-      stableId: event.stableId,
-      sourceType: event.sourceType,
-      eventType: event.eventType,
-      eventTag: event.eventTag as EventView["eventTag"],
-      eventTagConfidence: event.eventTagConfidence,
-      eventTitleZh: event.eventTitleZh,
-      eventHighlightZh: event.eventHighlightZh,
-      eventDetailSummaryZh: event.eventDetailSummaryZh,
-      timePrimary: event.timePrimary,
-      metrics: normalizeHomepageMetrics(event.sourceType, parseMetrics(event.metricsJson)),
-      sourceLinks: parseLinks(event.sourceLinksJson),
-      peopleDetectionStatus: event.peopleDetectionStatus,
-      projectStableIds: event.projectLinks.map((link) => link.project.stableId),
-      paperStableIds: event.paperLinks.map((link) => link.paper.stableId),
-      personStableIds: event.personLinks.map((link) => link.person.stableId),
-      displayRank: event.displayRank,
-      relatedRepoCount: event.relatedRepoCount,
-      relatedPaperCount: event.relatedPaperCount,
-      timeAgo: timeAgo(event.timePrimary),
-      projects,
-      papers,
-      people: event.personLinks.map((link) => mapPerson(link.person)),
-      isSaved: event.personLinks.some((link) => savedPeople.has(link.person.stableId)),
-      sourceSummaryLabel: getSourceSummaryLabel(event.sourceType),
-      cardSummary: buildSourceSummary(event.sourceType, projects[0], papers[0], event.eventHighlightZh, CARD_SOURCE_SUMMARY_LIMIT),
-      detailSummary,
-      introSummary: event.sourceType === "arxiv" ? detailSummary : compactCopy(event.eventDetailSummaryZh) || detailSummary,
-    };
-  });
+  const mappedEvents = events.map((event) => mapEventSummary(event, savedPeople));
 
   const githubEvents = mappedEvents
     .filter((event) => event.sourceType === "github")
@@ -305,6 +434,7 @@ export async function getHomepageData() {
     }));
 
   return {
+    datasetVersionId: activeDataset.id,
     githubEvents,
     arxivEvents: mappedEvents.filter((event) => event.sourceType === "arxiv"),
   };
@@ -379,4 +509,9 @@ export async function getActiveEventByStableId(stableId: string) {
       paperLinks: { include: { paper: true } },
     },
   });
+}
+
+export async function getActiveEventDetailByStableId(stableId: string) {
+  const event = await getActiveEventByStableId(stableId);
+  return event ? mapEventDetail(event) : null;
 }
