@@ -41,7 +41,11 @@ function buildRefreshMessage(eventCount: number, options: { aiEnabled: boolean; 
   }
 
   if (options.aiEventCount > 0 || options.aiPersonCount > 0) {
-    parts.push(`AI enriched ${options.aiEventCount} 条 event / ${options.aiPersonCount} 位人物`);
+    parts.push(
+      options.aiPersonCount > 0
+        ? `AI enriched ${options.aiEventCount} 条 event / ${options.aiPersonCount} 位人物`
+        : `AI enriched ${options.aiEventCount} 条 event`,
+    );
   } else {
     parts.push("AI 已启用，但本次未改写文案");
   }
@@ -439,9 +443,10 @@ async function executeRefreshRun(prisma: PrismaClient, refreshRunId: string, dat
     await updateRefreshProgress(prisma, refreshRunId, buildRefreshStageMessage("ai"));
 
     const aiResult = await enrichBundleWithOpenAI(bundle, {
+      enrichPeople: false,
       onProgress: async ({ phase, completedItems, totalItems }) => {
         const progress = phase === "events"
-          ? buildRefreshRangeProgress(getRefreshStageCopy("ai").progress, 84, completedItems, totalItems)
+          ? buildRefreshRangeProgress(getRefreshStageCopy("ai").progress, 89, completedItems, totalItems)
           : buildRefreshRangeProgress(84, 89, completedItems, totalItems);
         const detail = phase === "events" ? `events ${completedItems}/${totalItems}` : `people ${completedItems}/${totalItems}`;
         await updateRefreshProgress(

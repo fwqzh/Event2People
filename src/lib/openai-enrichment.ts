@@ -521,6 +521,7 @@ async function enrichPersonBatch(client: OpenAI, people: PersonInput[], bundle: 
 export async function enrichBundleWithOpenAI(
   bundle: DatasetBundleInput,
   options?: {
+    enrichPeople?: boolean;
     onProgress?: (progress: AiEnrichmentProgress) => void | Promise<void>;
   },
 ): Promise<AiEnrichmentResult> {
@@ -543,7 +544,7 @@ export async function enrichBundleWithOpenAI(
   let eventCount = 0;
   let personCount = 0;
   const eventBatches = chunk(events, EVENT_BATCH_SIZE);
-  const personBatches = chunk(people, PERSON_BATCH_SIZE);
+  const personBatches = options?.enrichPeople === false ? [] : chunk(people, PERSON_BATCH_SIZE);
 
   try {
     let completedBatches = 0;
@@ -572,31 +573,33 @@ export async function enrichBundleWithOpenAI(
     errors.push(error instanceof Error ? error.message : "event enrichment failed");
   }
 
-  try {
-    let completedBatches = 0;
-    let completedItems = 0;
+  if (personBatches.length > 0) {
+    try {
+      let completedBatches = 0;
+      let completedItems = 0;
 
-    for (const personBatch of personBatches) {
-      const result = await enrichPersonBatch(client, personBatch, {
-        ...bundle,
-        events,
-        people,
-      });
-      const nextByStableId = new Map(result.people.map((person) => [person.stableId, person]));
-      people = people.map((person) => nextByStableId.get(person.stableId) ?? person);
-      personCount += result.enrichedCount;
-      completedBatches += 1;
-      completedItems += personBatch.length;
-      await options?.onProgress?.({
-        phase: "people",
-        completedBatches,
-        totalBatches: personBatches.length,
-        completedItems,
-        totalItems: bundle.people.length,
-      });
+      for (const personBatch of personBatches) {
+        const result = await enrichPersonBatch(client, personBatch, {
+          ...bundle,
+          events,
+          people,
+        });
+        const nextByStableId = new Map(result.people.map((person) => [person.stableId, person]));
+        people = people.map((person) => nextByStableId.get(person.stableId) ?? person);
+        personCount += result.enrichedCount;
+        completedBatches += 1;
+        completedItems += personBatch.length;
+        await options?.onProgress?.({
+          phase: "people",
+          completedBatches,
+          totalBatches: personBatches.length,
+          completedItems,
+          totalItems: bundle.people.length,
+        });
+      }
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : "person enrichment failed");
     }
-  } catch (error) {
-    errors.push(error instanceof Error ? error.message : "person enrichment failed");
   }
 
   return {

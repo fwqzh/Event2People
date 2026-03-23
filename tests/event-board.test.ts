@@ -103,12 +103,24 @@ describe("EventBoard", () => {
 
     vi.stubGlobal(
       "fetch",
-      vi.fn(() => fetchPromise),
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+
+        if (url.includes("/api/pipeline")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ ok: true, savedPersonStableIds: [] }),
+          });
+        }
+
+        return fetchPromise;
+      }),
     );
 
     render(
       React.createElement(EventBoard, {
         datasetVersionId: "dataset-1",
+        savedPersonStableIds: [],
         githubEvents: [createSummaryEvent()],
         arxivEvents: [],
       }),
@@ -137,8 +149,17 @@ describe("EventBoard", () => {
     const user = userEvent.setup();
     vi.stubGlobal(
       "fetch",
-      vi.fn(() =>
-        Promise.resolve(
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+
+        if (url.includes("/api/pipeline")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ ok: true, savedPersonStableIds: [] }),
+          });
+        }
+
+        return Promise.resolve(
           createResponse(
             createDetail({
               stableId: "event:github:browserloop",
@@ -147,13 +168,14 @@ describe("EventBoard", () => {
               people: [],
             }),
           ),
-        ),
-      ),
+        );
+      }),
     );
 
     render(
       React.createElement(EventBoard, {
         datasetVersionId: "dataset-1",
+        savedPersonStableIds: [],
         githubEvents: [
           createSummaryEvent({
             stableId: "event:github:browserloop",
@@ -192,6 +214,14 @@ describe("EventBoard", () => {
       "fetch",
       vi.fn((input: RequestInfo | URL) => {
         const url = String(input);
+
+        if (url.includes("/api/pipeline")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ ok: true, savedPersonStableIds: [] }),
+          });
+        }
+
         const stableId = new URL(url, "http://localhost").searchParams.get("stableId");
 
         if (!stableId) {
@@ -215,6 +245,7 @@ describe("EventBoard", () => {
     render(
       React.createElement(EventBoard, {
         datasetVersionId: "dataset-1",
+        savedPersonStableIds: [],
         githubEvents: [
           createSummaryEvent(),
           createSummaryEvent({
@@ -240,6 +271,6 @@ describe("EventBoard", () => {
     expect(screen.getByRole("button", { name: "收起 browserloop" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "展开 open-manu" })).toBeInTheDocument();
     expect(screen.getByText("正在加载当前卡片详情")).toBeInTheDocument();
-    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(global.fetch).toHaveBeenCalledTimes(3);
   });
 });

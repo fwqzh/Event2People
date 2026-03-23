@@ -298,12 +298,17 @@ export function EventBoard({ datasetVersionId, savedPersonStableIds, githubEvent
     return target instanceof HTMLElement && Boolean(target.closest("a, button, summary, details"));
   }
 
-  function handleCardClick(stableId: string, target: EventTarget | null, currentTarget: HTMLElement | null) {
+  function handleCardClick(
+    stableId: string,
+    isExpanded: boolean,
+    target: EventTarget | null,
+    currentTarget: HTMLElement | null,
+  ) {
     if (shouldIgnoreCardToggle(target)) {
       return;
     }
 
-    if (hasActiveTextSelection(currentTarget)) {
+    if (isExpanded && hasActiveTextSelection(currentTarget)) {
       return;
     }
 
@@ -518,6 +523,7 @@ export function EventBoard({ datasetVersionId, savedPersonStableIds, githubEvent
                     onClick={(clickEvent) =>
                       handleCardClick(
                         event.stableId,
+                        isExpanded,
                         clickEvent.target,
                         clickEvent.currentTarget,
                       )
