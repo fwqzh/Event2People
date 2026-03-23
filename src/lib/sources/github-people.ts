@@ -34,8 +34,13 @@ type HomepageSignals = {
 type GitHubOwnerContext = {
   login: string;
   ownerUrl: string;
-  repoNames: string[];
-  repoDescriptions: string[];
+  type?: string;
+  repoRoles: Array<{
+    repoName: string;
+    repoDescription: string;
+    isOwner: boolean;
+    contributions: number;
+  }>;
 };
 
 type GitHubOwnerProgress = {
@@ -120,15 +125,42 @@ function tokenizeName(value: string) {
     .filter((token) => token.length >= 2);
 }
 
+export function githubStableId(login: string) {
+  return `github:${login.toLowerCase()}`;
+}
+
+function buildEvidenceSummary(repoRoles: GitHubOwnerContext["repoRoles"]) {
+  const sortedRoles = [...repoRoles].sort((left, right) => {
+    if (left.isOwner !== right.isOwner) {
+      return left.isOwner ? -1 : 1;
+    }
+
+    return right.contributions - left.contributions;
+  });
+
+  const clauses = sortedRoles.slice(0, 2).map((role) => {
+    const repoName = repoDisplayName(role.repoName);
+
+    if (role.isOwner) {
+      return `创建 ${repoName}`;
+    }
+
+    return role.contributions > 0 ? `参与 ${repoName} 核心开发（${role.contributions} commits）` : `参与 ${repoName} 核心开发`;
+  });
+
+  return uniqueStrings(clauses).join("；") || "参与相关 repo";
+}
+
 function buildOwnerBasePerson(context: GitHubOwnerContext) {
   const displayName = titleCaseGithubLogin(context.login);
-  const repoNames = context.repoNames.map((repoName) => repoDisplayName(repoName));
+  const hasOwnerRole = context.repoRoles.some((role) => role.isOwner);
+  const ownerType = compactText(context.type);
 
   return {
-    stableId: `github:${context.login.toLowerCase()}`,
+    stableId: githubStableId(context.login),
     name: displayName,
-    identitySummaryZh: "GitHub 构建者",
-    evidenceSummaryZh: uniqueStrings(repoNames.slice(0, 2).map((repoName) => `创建 ${repoName}`)).join("；") || "创建相关 repo",
+    identitySummaryZh: hasOwnerRole ? (ownerType === "Organization" ? "开源项目 · GitHub 维护者" : "GitHub 构建者") : "GitHub 核心贡献者",
+    evidenceSummaryZh: buildEvidenceSummary(context.repoRoles),
     sourceUrls: [context.ownerUrl],
     githubUrl: context.ownerUrl,
     organizationNamesRaw: [],
@@ -424,7 +456,10 @@ async function searchWithTavily(query: string) {
 function matchesContext(result: TavilySearchResult, context: GitHubOwnerContext, displayName: string, company: string) {
   const haystack = `${result.title} ${result.content} ${result.url}`.toLowerCase();
   const nameTokens = tokenizeName(displayName);
-  const repoTokens = context.repoNames.map((repoName) => repoDisplayName(repoName).toLowerCase());
+  const repoTokens =
+    Array.isArray(context.repoRoles) && context.repoRoles.length > 0
+      ? context.repoRoles.map((role) => repoDisplayName(role.repoName).toLowerCase())
+      : [];
   let score = 0;
 
   if (haystack.includes(context.login.toLowerCase())) {
@@ -510,7 +545,7 @@ async function enrichLinksWithSearch(context: GitHubOwnerContext, displayName: s
     };
   }
 
-  const repoHints = context.repoNames.map((repoName) => repoDisplayName(repoName)).slice(0, 2).join(" ");
+  const repoHints = context.repoRoles.map((role) => repoDisplayName(role.repoName)).slice(0, 2).join(" ");
   const generalQuery = [displayName || context.login, context.login, company, repoHints, "GitHub LinkedIn X homepage"].filter(Boolean).join(" ");
   const scholarQuery = [displayName || context.login, context.login, company, "Google Scholar"].filter(Boolean).join(" ");
 
@@ -535,7 +570,16 @@ export async function enrichGitHubOwnerPerson(context: GitHubOwnerContext) {
     const directHomepage = normalizeUrlCandidate(profile.blog);
     const directXUrl = profile.twitterUsername ? `https://x.com/${profile.twitterUsername.replace(/^@/, "")}` : "";
     const directBlogType = classifyHomepageLink(directHomepage);
-    const searchLinks = await enrichLinksWithSearch(context, displayName, profile.company);
+    const allowSearch = context.repoRoles.some((role) => role.isOwner);
+    const searchLinks = allowSearch
+      ? await enrichLinksWithSearch(context, displayName, profile.company)
+      : {
+          linkedinUrl: "",
+          scholarUrl: "",
+          xUrl: "",
+          homepageUrl: "",
+          searchSnippets: [] as string[],
+        };
 
     const homepageUrl =
       directBlogType === "other" ? normalizeProfileUrl(directHomepage) : searchLinks.homepageUrl;
@@ -552,7 +596,7 @@ export async function enrichGitHubOwnerPerson(context: GitHubOwnerContext) {
     ]);
     const bioSnippetsRaw = uniqueStrings([
       profile.bio,
-      ...context.repoDescriptions,
+      ...context.repoRoles.map((role) => role.repoDescription),
       ...(homepageSignals?.snippets ?? []),
       ...searchLinks.searchSnippets,
     ]).slice(0, 6);
@@ -562,8 +606,7 @@ export async function enrichGitHubOwnerPerson(context: GitHubOwnerContext) {
       stableId: base.stableId,
       name: displayName,
       identitySummaryZh: base.identitySummaryZh,
-      evidenceSummaryZh:
-        uniqueStrings(context.repoNames.slice(0, 2).map((repoName) => `创建 ${repoDisplayName(repoName)}`)).join("；") || base.evidenceSummaryZh,
+      evidenceSummaryZh: buildEvidenceSummary(context.repoRoles) || base.evidenceSummaryZh,
       sourceUrls,
       githubUrl: normalizeProfileUrl(profile.htmlUrl) || base.githubUrl,
       scholarUrl:
@@ -599,19 +642,42 @@ export async function enrichGitHubOwners(
   const owners = new Map<string, GitHubOwnerContext>();
 
   for (const project of projects) {
-    const current = owners.get(project.ownerName) ?? {
-      login: project.ownerName,
+    const ownerLogin = project.ownerName;
+    const ownerContext = owners.get(ownerLogin) ?? {
+      login: ownerLogin,
       ownerUrl: project.ownerUrl,
-      repoNames: [],
-      repoDescriptions: [],
+      type: project.ownerType ?? undefined,
+      repoRoles: [],
     };
 
-    current.repoNames.push(project.repoName);
-    if (project.repoDescriptionRaw) {
-      current.repoDescriptions.push(project.repoDescriptionRaw);
-    }
+    ownerContext.repoRoles.push({
+      repoName: project.repoName,
+      repoDescription: project.repoDescriptionRaw ?? "",
+      isOwner: true,
+      contributions: Math.max(project.contributorsCount, 1),
+    });
+    owners.set(ownerLogin, ownerContext);
 
-    owners.set(project.ownerName, current);
+    for (const contributor of project.githubContributors ?? []) {
+      if (!contributor.login || contributor.login.toLowerCase() === ownerLogin.toLowerCase()) {
+        continue;
+      }
+
+      const contributorContext = owners.get(contributor.login) ?? {
+        login: contributor.login,
+        ownerUrl: contributor.htmlUrl,
+        type: contributor.type,
+        repoRoles: [],
+      };
+
+      contributorContext.repoRoles.push({
+        repoName: project.repoName,
+        repoDescription: project.repoDescriptionRaw ?? "",
+        isOwner: false,
+        contributions: contributor.contributions,
+      });
+      owners.set(contributor.login, contributorContext);
+    }
   }
 
   const ownerList = [...owners.values()];

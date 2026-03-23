@@ -10,6 +10,7 @@ type EventDetailStatus = "idle" | "loading" | "ready" | "error";
 
 type EventBoardProps = {
   datasetVersionId: string;
+  savedPersonStableIds: string[];
   githubEvents: EventSummaryView[];
   arxivEvents: EventSummaryView[];
 };
@@ -40,8 +41,9 @@ const SECTION_CONFIG: Record<
   },
 };
 
-export function EventBoard({ datasetVersionId, githubEvents, arxivEvents }: EventBoardProps) {
+export function EventBoard({ datasetVersionId, savedPersonStableIds, githubEvents, arxivEvents }: EventBoardProps) {
   const detailRequestRef = useRef<{ stableId: string; controller: AbortController } | null>(null);
+  const [serverSavedPersonIds, setServerSavedPersonIds] = useState<string[]>(savedPersonStableIds);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [visibleCounts, setVisibleCounts] = useState<Record<EventSource, number>>({
     github: DEFAULT_VISIBLE_COUNT,
@@ -52,25 +54,21 @@ export function EventBoard({ datasetVersionId, githubEvents, arxivEvents }: Even
     arxiv: false,
   });
   const [newlySavedPersonIds, setNewlySavedPersonIds] = useState<Set<string>>(() => new Set());
+  const [removedPersonIds, setRemovedPersonIds] = useState<Set<string>>(() => new Set());
   const [detailsById, setDetailsById] = useState<Record<string, EventDetailView>>({});
   const [detailStatusById, setDetailStatusById] = useState<Record<string, EventDetailStatus>>({});
   const [detailErrorById, setDetailErrorById] = useState<Record<string, string>>({});
   const [detailReloadTokenById, setDetailReloadTokenById] = useState<Record<string, number>>({});
+  const [expandedPeopleByEventId, setExpandedPeopleByEventId] = useState<Record<string, boolean>>({});
   const [status, setStatus] = useState("");
 
   const allEvents = useMemo(() => [...githubEvents, ...arxivEvents], [arxivEvents, githubEvents]);
   const savedPersonIds = useMemo(() => {
-    const ids = new Set<string>();
-
-    allEvents.forEach((event) => {
-      if (event.isSaved) {
-        event.personStableIds.forEach((personStableId) => ids.add(personStableId));
-      }
-    });
-
+    const ids = new Set<string>(serverSavedPersonIds);
     newlySavedPersonIds.forEach((personStableId) => ids.add(personStableId));
+    removedPersonIds.forEach((personStableId) => ids.delete(personStableId));
     return ids;
-  }, [allEvents, newlySavedPersonIds]);
+  }, [newlySavedPersonIds, removedPersonIds, serverSavedPersonIds]);
 
   const abortDetailRequest = useEffectEvent(() => {
     if (detailRequestRef.current) {
@@ -78,6 +76,24 @@ export function EventBoard({ datasetVersionId, githubEvents, arxivEvents }: Even
       detailRequestRef.current = null;
     }
   });
+
+  async function syncSavedPeople() {
+    try {
+      const response = await fetch("/api/pipeline", {
+        method: "GET",
+        cache: "no-store",
+      });
+      const payload = await response.json();
+
+      if (!response.ok) {
+        return;
+      }
+
+      setServerSavedPersonIds(Array.isArray(payload.savedPersonStableIds) ? payload.savedPersonStableIds : []);
+    } catch {
+      // Ignore sync failures and keep current UI state.
+    }
+  }
 
   const loadEventDetail = useEffectEvent(async (stableId: string) => {
     if (detailsById[stableId] || detailStatusById[stableId] === "loading") {
@@ -142,12 +158,43 @@ export function EventBoard({ datasetVersionId, githubEvents, arxivEvents }: Even
   }, []);
 
   useEffect(() => {
+    setServerSavedPersonIds(savedPersonStableIds);
+  }, [savedPersonStableIds]);
+
+  useEffect(() => {
     abortDetailRequest();
     setDetailsById({});
     setDetailStatusById({});
     setDetailErrorById({});
     setDetailReloadTokenById({});
+    setExpandedPeopleByEventId({});
+    setRemovedPersonIds(new Set());
+    setNewlySavedPersonIds(new Set());
   }, [datasetVersionId]);
+
+  useEffect(() => {
+    void syncSavedPeople();
+  }, [datasetVersionId]);
+
+  useEffect(() => {
+    const onWindowFocus = () => {
+      void syncSavedPeople();
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void syncSavedPeople();
+      }
+    };
+
+    window.addEventListener("focus", onWindowFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      window.removeEventListener("focus", onWindowFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, []);
 
   useEffect(() => {
     if (expandedId && !allEvents.some((event) => event.stableId === expandedId)) {
@@ -184,11 +231,47 @@ export function EventBoard({ datasetVersionId, githubEvents, arxivEvents }: Even
     }
 
     setNewlySavedPersonIds((current) => new Set([...current, personStableId]));
-    setStatus("已加入 Pipeline");
+    setRemovedPersonIds((current) => {
+      const next = new Set(current);
+      next.delete(personStableId);
+      return next;
+    });
+    void syncSavedPeople();
+  }
+
+  async function removeFromPipeline(personStableId: string) {
+    setStatus("");
+
+    const response = await fetch("/api/pipeline", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ personStableId }),
+    });
+
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error ?? "取消失败");
+    }
+
+    setNewlySavedPersonIds((current) => {
+      const next = new Set(current);
+      next.delete(personStableId);
+      return next;
+    });
+    setRemovedPersonIds((current) => new Set([...current, personStableId]));
+    void syncSavedPeople();
   }
 
   function toggleExpanded(stableId: string) {
     setExpandedId((current) => (current === stableId ? null : stableId));
+  }
+
+  function togglePeopleExpanded(eventStableId: string) {
+    setExpandedPeopleByEventId((current) => ({
+      ...current,
+      [eventStableId]: !current[eventStableId],
+    }));
   }
 
   function shouldIgnoreCardToggle(target: EventTarget | null) {
@@ -204,10 +287,60 @@ export function EventBoard({ datasetVersionId, githubEvents, arxivEvents }: Even
   }
 
   function getPersonMeta(person: PersonView) {
-    return [
-      person.organizationNamesRaw?.[0] ?? person.schoolNamesRaw?.[0] ?? person.labNamesRaw?.[0] ?? "",
-      person.email ? `Email: ${person.email}` : "",
-    ].filter(Boolean);
+    return [person.organizationNamesRaw?.[0] ?? person.schoolNamesRaw?.[0] ?? person.labNamesRaw?.[0] ?? ""].filter(Boolean);
+  }
+
+  function getEffectiveContributionCount(person: EventDetailView["people"][number]) {
+    if (person.contributionCount > 0) {
+      return person.contributionCount;
+    }
+
+    const matchedCount = person.evidenceSummaryZh.match(/(\d+)\s*commits/i)?.[1];
+    return matchedCount ? Number(matchedCount) : 0;
+  }
+
+  function getPersonSubline(person: EventDetailView["people"][number], sourceType: EventSource) {
+    if (sourceType === "github") {
+      const contributionCount = getEffectiveContributionCount(person);
+      return contributionCount > 0 ? `${contributionCount} commits` : "commit 数未知";
+    }
+
+    return person.identitySummaryZh;
+  }
+
+  function getReadablePersonLinks(person: EventDetailView["people"][number]) {
+    return person.links.map((link) => {
+      if (link.label === "Email") {
+        const email = link.url.replace(/^mailto:/i, "");
+        return {
+          label: "邮箱",
+          value: email,
+          href: link.url,
+        };
+      }
+
+      if (link.label === "GitHub") {
+        return {
+          label: "GitHub链接",
+          value: link.url,
+          href: link.url,
+        };
+      }
+
+      if (link.label === "Homepage") {
+        return {
+          label: "个人主页",
+          value: link.url,
+          href: link.url,
+        };
+      }
+
+      return {
+        label: link.label,
+        value: link.url,
+        href: link.url,
+      };
+    });
   }
 
   function getPrimarySourceUrl(event: EventSummaryView) {
@@ -336,7 +469,23 @@ export function EventBoard({ datasetVersionId, githubEvents, arxivEvents }: Even
               const showDetailSummaryInPanel = event.sourceType !== "github" && Boolean(detail);
               const showEventLens = Boolean(detail) && detail.detailSummary !== event.eventHighlightZh;
               const primaryDetailPanelTitle = event.sourceType === "github" ? "项目信号" : detail?.sourceSummaryLabel ?? "论文简介";
-              const people = detail?.people ?? [];
+              const people =
+                detail?.people
+                  ?.slice()
+                  .sort((left, right) => {
+                    if (event.sourceType === "github") {
+                      const contributionDelta = getEffectiveContributionCount(right) - getEffectiveContributionCount(left);
+
+                      if (contributionDelta !== 0) {
+                        return contributionDelta;
+                      }
+                    }
+
+                    return left.name.localeCompare(right.name);
+                  }) ?? [];
+              const peopleExpanded = expandedPeopleByEventId[event.stableId] ?? false;
+              const visiblePeople = peopleExpanded ? people : people.slice(0, 4);
+              const hasMorePeople = people.length > 4;
 
               return (
                 <div key={event.stableId} className={`event-stack ${isExpanded ? "is-expanded" : ""}`}>
@@ -515,8 +664,9 @@ export function EventBoard({ datasetVersionId, githubEvents, arxivEvents }: Even
                               <section className="detail-panel detail-panel--wide">
                                 <h5>关联人物</h5>
                                 {people.length > 0 ? (
-                                  <div className="person-card-grid">
-                                    {people.map((person) => {
+                                  <>
+                                    <div className="person-card-grid">
+                                      {visiblePeople.map((person) => {
                                       const isSaved = savedPersonIds.has(person.stableId);
                                       const personMeta = getPersonMeta(person);
 
@@ -525,14 +675,26 @@ export function EventBoard({ datasetVersionId, githubEvents, arxivEvents }: Even
                                           <div className="person-card__header">
                                             <div>
                                               <h6>{person.name}</h6>
-                                              <p>{person.identitySummaryZh}</p>
+                                              <p>{getPersonSubline(person, event.sourceType)}</p>
                                             </div>
                                             <button
                                               type="button"
-                                              className="primary-button"
-                                              disabled={isSaved}
+                                              className={`pipeline-add-button ${isSaved ? "is-saved" : ""}`}
+                                              aria-label={
+                                                isSaved ? `已将 ${person.name} 加入 Pipeline，点击移除` : `将 ${person.name} 加入 Pipeline`
+                                              }
                                               onClick={(clickEvent) => {
                                                 clickEvent.stopPropagation();
+
+                                                if (isSaved) {
+                                                  startTransition(() => {
+                                                    void removeFromPipeline(person.stableId).catch((error) => {
+                                                      setStatus(error instanceof Error ? error.message : "取消失败");
+                                                    });
+                                                  });
+                                                  return;
+                                                }
+
                                                 startTransition(() => {
                                                   void saveToPipeline(person.stableId, event.stableId).catch((error) => {
                                                     setStatus(error instanceof Error ? error.message : "保存失败");
@@ -540,7 +702,19 @@ export function EventBoard({ datasetVersionId, githubEvents, arxivEvents }: Even
                                                 });
                                               }}
                                             >
-                                              {isSaved ? "已在 Pipeline" : "加入 Pipeline"}
+                                              <span className="pipeline-add-button__icon" aria-hidden="true">
+                                                {isSaved ? "✓" : "+"}
+                                              </span>
+                                              <span className="pipeline-add-button__label">
+                                                {isSaved ? (
+                                                  <>
+                                                    <span className="pipeline-add-button__label-line">已在Pipeline</span>
+                                                    <span className="pipeline-add-button__label-line">点击移除</span>
+                                                  </>
+                                                ) : (
+                                                  <span className="pipeline-add-button__label-line">加入Pipeline</span>
+                                                )}
+                                              </span>
                                             </button>
                                           </div>
                                           {personMeta.length > 0 ? (
@@ -552,18 +726,36 @@ export function EventBoard({ datasetVersionId, githubEvents, arxivEvents }: Even
                                               ))}
                                             </div>
                                           ) : null}
-                                          <p className="person-card__evidence">证据：{person.evidenceSummaryZh}</p>
-                                          <div className="link-list">
-                                            {person.links.map((sourceLink) => (
-                                              <Link key={sourceLink.url} href={sourceLink.url} target="_blank" rel="noreferrer">
-                                                {sourceLink.label}
-                                              </Link>
+                                          <p className="person-card__evidence">{person.evidenceSummaryZh}</p>
+                                          <div className="link-list link-list--stacked">
+                                            {getReadablePersonLinks(person).map((sourceLink) => (
+                                              <p key={`${person.stableId}-${sourceLink.label}-${sourceLink.value}`} className="link-list__text">
+                                                <span>{sourceLink.label}：</span>
+                                                <Link href={sourceLink.href} target="_blank" rel="noreferrer">
+                                                  {sourceLink.value}
+                                                </Link>
+                                              </p>
                                             ))}
                                           </div>
                                         </article>
                                       );
-                                    })}
-                                  </div>
+                                      })}
+                                    </div>
+                                    {hasMorePeople ? (
+                                      <div className="person-card-grid__actions">
+                                        <button
+                                          type="button"
+                                          className="text-action-button"
+                                          onClick={(clickEvent) => {
+                                            clickEvent.stopPropagation();
+                                            togglePeopleExpanded(event.stableId);
+                                          }}
+                                        >
+                                          {peopleExpanded ? "收起人物" : "展开更多"}
+                                        </button>
+                                      </div>
+                                    ) : null}
+                                  </>
                                 ) : (
                                   <div className="empty-state">暂未识别到明确关联人物</div>
                                 )}

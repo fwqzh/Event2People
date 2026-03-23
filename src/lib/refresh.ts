@@ -15,7 +15,7 @@ import { decideRepoPaperLink } from "@/lib/repo-paper-linking";
 import { buildSampleDataset } from "@/lib/sample-data";
 import { persistDataset } from "@/lib/seed";
 import { fetchArxivPapers } from "@/lib/sources/arxiv";
-import { enrichGitHubOwners } from "@/lib/sources/github-people";
+import { enrichGitHubOwners, githubStableId } from "@/lib/sources/github-people";
 import { fetchGitHubTrendingRepos } from "@/lib/sources/github";
 import { clampZh, formatDay, repoDisplayName, sentenceZh, slugify, uniqueStrings } from "@/lib/text";
 import type { DatasetBundleInput, EventInput, PaperInput, PersonInput, ProjectInput, RepoPaperLinkInput } from "@/lib/types";
@@ -66,20 +66,33 @@ function personFromAuthor(name: string): PersonInput {
 
 function mergePeopleConservatively(people: PersonInput[]) {
   const merged: PersonInput[] = [];
+  const stableIdMap = new Map<string, string>();
 
   for (const person of people) {
     const existing = merged.find((candidate) => shouldMergePeople(candidate, person).shouldMerge);
 
     if (!existing) {
       merged.push(person);
+      stableIdMap.set(person.stableId, person.stableId);
+      continue;
     }
+
+    stableIdMap.set(person.stableId, existing.stableId);
   }
 
-  return merged;
+  return {
+    people: merged,
+    stableIdMap,
+  };
+}
+
+function remapPersonStableIds(personStableIds: string[], stableIdMap: Map<string, string>) {
+  return uniqueStrings(personStableIds.map((stableId) => stableIdMap.get(stableId) ?? stableId));
 }
 
 function createProjectInputs(githubRepos: Awaited<ReturnType<typeof fetchGitHubTrendingRepos>>): ProjectInput[] {
   return githubRepos.map((repo) => ({
+    ownerType: repo.owner.type,
     stableId: `repo:${repo.fullName.toLowerCase()}`,
     repoName: repo.fullName,
     repoUrl: repo.htmlUrl,
@@ -93,6 +106,12 @@ function createProjectInputs(githubRepos: Awaited<ReturnType<typeof fetchGitHubT
     repoUpdatedAt: repo.updatedAt,
     repoDescriptionRaw: repo.description,
     readmeExcerptRaw: repo.readmeExcerpt,
+    githubContributors: repo.contributors.map((contributor) => ({
+      login: contributor.login,
+      htmlUrl: contributor.htmlUrl,
+      type: contributor.type,
+      contributions: contributor.contributions,
+    })),
   }));
 }
 
@@ -141,6 +160,22 @@ function buildRepoPaperLinks(projects: ProjectInput[], papers: PaperInput[]) {
   return repoPaperLinks;
 }
 
+function countGitHubPeopleCandidates(projects: ProjectInput[]) {
+  const identities = new Set<string>();
+
+  for (const project of projects) {
+    identities.add(project.ownerName.toLowerCase());
+
+    for (const contributor of project.githubContributors ?? []) {
+      if (contributor.login) {
+        identities.add(contributor.login.toLowerCase());
+      }
+    }
+  }
+
+  return identities.size;
+}
+
 function buildConfirmedLinkIndex(repoPaperLinks: RepoPaperLinkInput[]) {
   const byProject = new Map<string, RepoPaperLinkInput[]>();
   const byPaper = new Map<string, RepoPaperLinkInput[]>();
@@ -171,7 +206,36 @@ function buildGitHubEvents(
     const matchingLinks = confirmedLinksByProject.get(project.stableId) ?? [];
     const linkedPaper = matchingLinks.map((link) => paperByStableId.get(link.paperStableId)).find(Boolean);
     const tag = classifyEventTag([project.repoName, project.repoDescriptionRaw ?? "", project.readmeExcerptRaw ?? ""]);
-    const personStableId = `github:${slugify(project.ownerName)}`;
+    const ownerStableId = githubStableId(project.ownerName);
+    const contributorEntries = (project.githubContributors ?? []).map((contributor) => ({
+      stableId: githubStableId(contributor.login),
+      contributionCount: contributor.contributions,
+      isOwner: contributor.login.toLowerCase() === project.ownerName.toLowerCase(),
+    }));
+    const ownerContributionCount =
+      contributorEntries.find((entry) => entry.stableId === ownerStableId)?.contributionCount ?? 0;
+    const orderedPersonStableIds = uniqueStrings(
+      [
+        {
+          stableId: ownerStableId,
+          contributionCount: ownerContributionCount,
+          isOwner: true,
+        },
+        ...contributorEntries,
+      ]
+        .sort((left, right) => {
+          if (right.contributionCount !== left.contributionCount) {
+            return right.contributionCount - left.contributionCount;
+          }
+
+          if (left.isOwner !== right.isOwner) {
+            return left.isOwner ? -1 : 1;
+          }
+
+          return left.stableId.localeCompare(right.stableId);
+        })
+        .map((entry) => entry.stableId),
+    );
 
     return {
       stableId: `event:github:${slugify(project.repoName)}`,
@@ -191,10 +255,10 @@ function buildGitHubEvents(
         metric("Total Stars", countFormatter.format(project.stars)),
       ],
       sourceLinks: [link("GitHub", project.repoUrl), ...(linkedPaper ? [link("Paper", linkedPaper.paperUrl)] : [])],
-      peopleDetectionStatus: "resolved",
+      peopleDetectionStatus: orderedPersonStableIds.length > 0 ? "resolved" : "missing",
       projectStableIds: [project.stableId],
       paperStableIds: linkedPaper ? [linkedPaper.stableId] : [],
-      personStableIds: [personStableId],
+      personStableIds: orderedPersonStableIds,
       displayRank: index + 1,
       relatedRepoCount: 1,
       relatedPaperCount: linkedPaper ? 1 : 0,
@@ -247,15 +311,20 @@ function buildLiveDatasetBundle(githubProjects: ProjectInput[], papers: PaperInp
   const confirmedLinkIndex = buildConfirmedLinkIndex(repoPaperLinks);
   const githubEvents = buildGitHubEvents(githubProjects, paperByStableId, confirmedLinkIndex.byProject);
   const arxivEvents = buildArxivEvents(papers, confirmedLinkIndex.byPaper);
+  const mergedPeople = mergePeopleConservatively(people);
+  const remappedEvents = [...githubEvents, ...arxivEvents].map((event) => ({
+    ...event,
+    personStableIds: remapPersonStableIds(event.personStableIds, mergedPeople.stableIdMap),
+  }));
 
   return {
     label: "Live refresh",
     source: "refresh",
     projects: githubProjects,
     papers,
-    people: mergePeopleConservatively(people),
+    people: mergedPeople.people,
     repoPaperLinks,
-    events: [...githubEvents, ...arxivEvents],
+    events: remappedEvents,
   };
 }
 
@@ -334,7 +403,7 @@ async function executeRefreshRun(prisma: PrismaClient, refreshRunId: string, dat
 
     const githubProjects = createProjectInputs(githubRepos);
     const papers = createPaperInputs(arxivPapers);
-    const ownerCount = new Set(githubProjects.map((project) => project.ownerName)).size;
+    const ownerCount = countGitHubPeopleCandidates(githubProjects);
 
     await updateRefreshProgress(
       prisma,

@@ -77,6 +77,9 @@ type HomepageEventRecord = Prisma.EventGetPayload<{
       };
     };
     personLinks: {
+      orderBy: {
+        position: "asc",
+      },
       include: {
         person: {
           select: {
@@ -99,6 +102,9 @@ type HomepageEventRecord = Prisma.EventGetPayload<{
 type ActiveEventRecord = Prisma.EventGetPayload<{
   include: {
     personLinks: {
+      orderBy: {
+        position: "asc",
+      },
       include: {
         person: true;
       };
@@ -121,11 +127,11 @@ const DETAIL_SOURCE_SUMMARY_LIMIT = 560;
 const countFormatter = new Intl.NumberFormat("en-US");
 
 const PERSON_LINK_BUILDERS = [
+  { label: "Homepage", getUrl: (person: PersonLinkRecord) => person.homepageUrl },
   { label: "GitHub", getUrl: (person: PersonLinkRecord) => person.githubUrl },
   { label: "Scholar", getUrl: (person: PersonLinkRecord) => person.scholarUrl },
   { label: "LinkedIn", getUrl: (person: PersonLinkRecord) => person.linkedinUrl },
   { label: "X", getUrl: (person: PersonLinkRecord) => person.xUrl },
-  { label: "Homepage", getUrl: (person: PersonLinkRecord) => person.homepageUrl },
   { label: "Email", getUrl: (person: PersonLinkRecord) => (person.email ? `mailto:${person.email}` : null) },
 ] as const;
 
@@ -287,6 +293,13 @@ function mapPersonPreview(person: PersonLinkRecord & Pick<PersonRecord, "stableI
   };
 }
 
+function mapEventDetailPerson(link: ActiveEventRecord["personLinks"][number]) {
+  return {
+    ...mapPerson(link.person),
+    contributionCount: link.contributionCount,
+  };
+}
+
 function mapEventSummary(
   event: HomepageEventRecord,
   savedPeople: Set<string>,
@@ -363,7 +376,7 @@ function mapEventDetail(
 
   return {
     stableId: event.stableId,
-    people: event.personLinks.map((link) => mapPerson(link.person)),
+    people: event.personLinks.map((link) => mapEventDetailPerson(link)),
     sourceSummaryLabel: getSourceSummaryLabel(event.sourceType),
     detailSummary,
     introSummary:
@@ -401,10 +414,13 @@ export async function getHomepageData() {
           paper: true,
         },
       },
-      personLinks: {
-        include: {
-          person: {
-            select: {
+    personLinks: {
+      orderBy: {
+        position: "asc",
+      },
+      include: {
+        person: {
+          select: {
               stableId: true,
               name: true,
               githubUrl: true,
@@ -435,6 +451,7 @@ export async function getHomepageData() {
 
   return {
     datasetVersionId: activeDataset.id,
+    savedPersonStableIds: [...savedPeople],
     githubEvents,
     arxivEvents: mappedEvents.filter((event) => event.sourceType === "arxiv"),
   };
@@ -504,7 +521,7 @@ export async function getActiveEventByStableId(stableId: string) {
       datasetVersionId: activeDataset.id,
     },
     include: {
-      personLinks: { include: { person: true } },
+      personLinks: { orderBy: { position: "asc" }, include: { person: true } },
       projectLinks: { include: { project: true } },
       paperLinks: { include: { paper: true } },
     },

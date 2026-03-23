@@ -10,6 +10,22 @@ const bodySchema = z.object({
   eventStableId: z.string().min(1),
 });
 
+const deleteBodySchema = z.object({
+  personStableId: z.string().min(1),
+});
+
+export async function GET() {
+  const entries = await prisma.pipelineEntry.findMany({
+    orderBy: { savedAt: "desc" },
+    select: { personStableId: true },
+  });
+
+  return NextResponse.json({
+    ok: true,
+    savedPersonStableIds: entries.map((entry) => entry.personStableId),
+  });
+}
+
 export async function POST(request: Request) {
   const body = bodySchema.parse(await request.json());
   const event = await getActiveEventByStableId(body.eventStableId);
@@ -88,4 +104,14 @@ export async function POST(request: Request) {
   });
 
   return NextResponse.json({ ok: true, recentActivitySummaryZh });
+}
+
+export async function DELETE(request: Request) {
+  const body = deleteBodySchema.parse(await request.json());
+
+  await prisma.pipelineEntry.deleteMany({
+    where: { personStableId: body.personStableId },
+  });
+
+  return NextResponse.json({ ok: true });
 }

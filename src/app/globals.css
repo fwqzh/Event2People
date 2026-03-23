@@ -706,6 +706,16 @@ select {
   margin-top: 16px;
 }
 
+.detail-panel--wide .person-card-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.person-card-grid__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
 .person-card {
   padding: 18px;
 }
@@ -2285,6 +2295,10 @@ body::after {
   gap: 16px;
 }
 
+.detail-panel--wide .person-card-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .person-card {
   padding: 20px;
 }
@@ -2323,7 +2337,132 @@ body::after {
   letter-spacing: 0.04em;
 }
 
+.link-list--stacked {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.link-list__text {
+  color: var(--muted);
+  line-height: 1.65;
+  word-break: break-word;
+}
+
+.link-list__text span {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.link-list--stacked a {
+  display: inline;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--teal);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  box-shadow: none;
+}
+
+.link-list--stacked a:hover {
+  background: none;
+  border-color: transparent;
+  color: var(--ink);
+}
+
+.text-action-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.4;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.text-action-button:hover {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.pipeline-add-button {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 160ms ease;
+}
+
+.pipeline-add-button:hover,
+.pipeline-add-button:focus-visible {
+  color: var(--ink);
+}
+
+.pipeline-add-button__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.2rem;
+  min-width: 1.2rem;
+  font-family: var(--font-mono), "SFMono-Regular", monospace;
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.pipeline-add-button__label {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  max-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  font-size: 0.9rem;
+  line-height: 1.2;
+  transition:
+    max-width 180ms ease,
+    opacity 140ms ease;
+}
+
+.pipeline-add-button:hover .pipeline-add-button__label,
+.pipeline-add-button:focus-visible .pipeline-add-button__label {
+  max-width: 9.2rem;
+  opacity: 1;
+}
+
+.pipeline-add-button__label-line {
+  white-space: nowrap;
+}
+
+.pipeline-add-button.is-saved {
+  color: var(--teal);
+  cursor: pointer;
+}
+
+@media (max-width: 1200px) {
+  .detail-panel--wide .person-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .detail-panel--wide .person-card-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .pipeline-card {
+  position: relative;
   padding: 20px;
 }
 
@@ -2342,6 +2481,7 @@ body::after {
 
 .pipeline-card__body {
   gap: 12px;
+  padding-right: 34px;
 }
 
 .pipeline-card__body p,
@@ -2353,6 +2493,56 @@ body::after {
   color: var(--ink);
   font-size: 1.02rem;
   line-height: 1.6;
+}
+
+.pipeline-remove-button {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  z-index: 2;
+  transition: color 160ms ease;
+}
+
+.pipeline-remove-button:hover,
+.pipeline-remove-button:focus-visible {
+  color: var(--ink);
+}
+
+.pipeline-remove-button__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  min-width: 1rem;
+  font-family: var(--font-mono), "SFMono-Regular", monospace;
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+.pipeline-remove-button__label {
+  max-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  opacity: 0;
+  font-size: 0.88rem;
+  line-height: 1.2;
+  transition:
+    max-width 180ms ease,
+    opacity 140ms ease;
+}
+
+.pipeline-remove-button:hover .pipeline-remove-button__label,
+.pipeline-remove-button:focus-visible .pipeline-remove-button__label {
+  max-width: 8rem;
+  opacity: 1;
 }
 
 .detail-workbench {
@@ -2599,6 +2789,7 @@ body::after {
   --bg: #e7d8b3;
   --card: #faf4e8;
   --card-strong: #f3ead9;
+  --site-header-height: 112px;
   --ambient-focus-x: 50%;
   --ambient-focus-y: 18%;
   --ambient-active: 0.22;
@@ -2636,51 +2827,60 @@ body::after {
 
 .ambient-grid__mesh {
   background-image:
-    linear-gradient(rgba(94, 76, 39, 0.1) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(94, 76, 39, 0.08) 1px, transparent 1px);
+    linear-gradient(rgba(94, 76, 39, 0.14) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(94, 76, 39, 0.12) 1px, transparent 1px);
   background-size: 72px 72px;
-  opacity: 0.3;
+  opacity: 0.42;
   mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.4) 0, rgba(0, 0, 0, 0.9) 16%, rgba(0, 0, 0, 0.88) 84%, rgba(0, 0, 0, 0.3) 100%);
   animation: ambient-grid-drift 30s linear infinite;
 }
 
 .ambient-grid__micro {
   background-image:
-    linear-gradient(rgba(148, 118, 61, 0.06) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(148, 118, 61, 0.05) 1px, transparent 1px);
+    linear-gradient(rgba(148, 118, 61, 0.09) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 118, 61, 0.08) 1px, transparent 1px);
   background-size: 18px 18px;
-  opacity: 0.16;
+  opacity: 0.22;
   mask-image: radial-gradient(circle at 50% 20%, rgba(0, 0, 0, 0.22), rgba(0, 0, 0, 0.82) 46%, transparent 84%);
   animation: ambient-grid-drift-reverse 36s linear infinite;
 }
 
 .ambient-grid__focus {
   background-image:
-    linear-gradient(rgba(176, 141, 79, calc(0.2 * var(--ambient-active))) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(176, 141, 79, calc(0.16 * var(--ambient-active))) 1px, transparent 1px);
+    linear-gradient(rgba(176, 141, 79, calc(0.26 * var(--ambient-active))) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(176, 141, 79, calc(0.22 * var(--ambient-active))) 1px, transparent 1px);
   background-size: 72px 72px;
-  opacity: 0.92;
-  mask-image: radial-gradient(circle 180px at var(--ambient-focus-x) var(--ambient-focus-y), rgba(0, 0, 0, 1) 0, rgba(0, 0, 0, 0.8) 34%, rgba(0, 0, 0, 0.2) 60%, transparent 78%);
+  opacity: 0.96;
+  mask-image: radial-gradient(circle 220px at var(--ambient-focus-x) var(--ambient-focus-y), rgba(0, 0, 0, 1) 0, rgba(0, 0, 0, 0.84) 36%, rgba(0, 0, 0, 0.24) 62%, transparent 82%);
   animation: ambient-grid-drift 24s linear infinite reverse;
 }
 
 .ambient-grid__pulse {
   background: repeating-radial-gradient(
     circle at var(--ambient-focus-x) var(--ambient-focus-y),
-    rgba(178, 143, 82, calc(0.12 * var(--ambient-active))) 0,
-    rgba(178, 143, 82, calc(0.12 * var(--ambient-active))) 1px,
+    rgba(178, 143, 82, calc(0.16 * var(--ambient-active))) 0,
+    rgba(178, 143, 82, calc(0.16 * var(--ambient-active))) 1px,
     transparent 1px,
     transparent 32px
   );
-  opacity: 0.62;
-  mask-image: radial-gradient(circle 240px at var(--ambient-focus-x) var(--ambient-focus-y), rgba(0, 0, 0, 0.72) 0, rgba(0, 0, 0, 0.28) 58%, transparent 84%);
+  opacity: 0.7;
+  mask-image: radial-gradient(circle 280px at var(--ambient-focus-x) var(--ambient-focus-y), rgba(0, 0, 0, 0.72) 0, rgba(0, 0, 0, 0.28) 60%, transparent 86%);
   animation: ambient-grid-breathe 5.8s ease-in-out infinite;
 }
 
-body > .site-header,
-body > .page-shell--main {
+.page-shell--main {
   position: relative;
   z-index: 1;
+  padding-top: calc(var(--site-header-height) + 28px);
+}
+
+.site-header,
+body > .site-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 80;
 }
 
 .site-header {
@@ -2692,6 +2892,22 @@ body > .page-shell--main {
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.04),
     0 18px 44px rgba(3, 10, 18, 0.16);
+  transition:
+    background 220ms ease,
+    border-color 220ms ease,
+    box-shadow 220ms ease,
+    backdrop-filter 220ms ease,
+    -webkit-backdrop-filter 220ms ease;
+}
+
+.site-header.is-scrolled {
+  background: linear-gradient(180deg, rgba(10, 24, 39, 0.66) 0%, rgba(9, 25, 42, 0.58) 100%);
+  border-bottom-color: rgba(215, 200, 146, 0.24);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 20px 44px rgba(3, 10, 18, 0.24);
+  backdrop-filter: blur(22px) saturate(145%);
+  -webkit-backdrop-filter: blur(22px) saturate(145%);
 }
 
 .site-header::before {
@@ -2803,6 +3019,7 @@ body > .page-shell--main {
 
 .site-nav {
   isolation: isolate;
+  gap: 4px;
 }
 
 .site-nav::before {
@@ -2831,6 +3048,31 @@ body > .page-shell--main {
     );
   opacity: 0.72;
   z-index: -1;
+}
+
+.site-nav .site-nav__button {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: transparent;
+  color: rgba(248, 241, 228, 0.88);
+  box-shadow: none;
+}
+
+.site-nav .site-nav__button:hover,
+.site-nav .site-nav__button:focus-visible {
+  background: rgba(248, 241, 228, 0.11);
+  border-color: rgba(248, 241, 228, 0.08);
+  color: #fff7ea;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 10px 24px rgba(3, 10, 18, 0.12);
+}
+
+.site-nav .site-nav__button:disabled {
+  opacity: 0.58;
+  box-shadow: none;
 }
 
 .hero-panel,
@@ -2904,6 +3146,10 @@ body > .page-shell--main {
   background-image: none;
 }
 
+.board-section {
+  position: relative;
+}
+
 .event-card,
 .event-detail-card,
 .pipeline-card,
@@ -2942,6 +3188,11 @@ body > .page-shell--main {
 .detail-workbench .detail-panel h5,
 .detail-workbench .link-list a {
   color: var(--ink);
+}
+
+.link-list--stacked a,
+.detail-workbench .link-list--stacked a {
+  color: var(--teal);
 }
 
 .toolbar-card--board {

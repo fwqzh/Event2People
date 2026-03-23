@@ -221,10 +221,13 @@ model EventPaper {
 model EventPerson {
   eventId  String
   personId String
+  position Int      @default(0)
+  contributionCount Int @default(0)
   event    Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
   person   Person @relation(fields: [personId], references: [id], onDelete: Cascade)
 
   @@id([eventId, personId])
+  @@index([eventId, position])
 }
 
 model PipelineEntry {

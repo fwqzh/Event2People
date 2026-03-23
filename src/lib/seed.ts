@@ -13,6 +13,28 @@ async function clearExistingPipelineEntries(tx: TxClient) {
   await tx.pipelineEntry.deleteMany();
 }
 
+function getGitHubContributionCount(
+  bundle: DatasetBundleInput,
+  event: DatasetBundleInput["events"][number],
+  personStableId: string,
+) {
+  if (event.sourceType !== "github") {
+    return 0;
+  }
+
+  const project = bundle.projects.find((candidate) => candidate.stableId === event.projectStableIds[0]);
+
+  if (!project) {
+    return 0;
+  }
+
+  const contributor = (project.githubContributors ?? []).find(
+    (candidate) => `github:${candidate.login.toLowerCase()}` === personStableId,
+  );
+
+  return contributor?.contributions ?? 0;
+}
+
 async function persistDataset(tx: TxClient, datasetVersionId: string, bundle: DatasetBundleInput) {
   await tx.project.createMany({
     data: bundle.projects.map((project) => ({
@@ -139,9 +161,11 @@ async function persistDataset(tx: TxClient, datasetVersionId: string, bundle: Da
 
   await tx.eventPerson.createMany({
     data: bundle.events.flatMap((event) =>
-      event.personStableIds.map((personStableId) => ({
+      event.personStableIds.map((personStableId, index) => ({
         eventId: recordId(datasetVersionId, "event", event.stableId),
         personId: recordId(datasetVersionId, "person", personStableId),
+        position: index,
+        contributionCount: getGitHubContributionCount(bundle, event, personStableId),
       })),
     ),
   });

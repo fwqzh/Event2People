@@ -14,6 +14,13 @@ type GitHubTrendingCandidate = {
   contributorAvatarUrls: string[];
 };
 
+type GitHubContributorRecord = {
+  login: string;
+  htmlUrl: string;
+  type: string;
+  contributions: number;
+};
+
 export type GitHubRepoRecord = {
   rank: number;
   fullName: string;
@@ -25,6 +32,7 @@ export type GitHubRepoRecord = {
   todayStars: number;
   contributorAvatarUrls: string[];
   contributorsCount: number;
+  contributors: GitHubContributorRecord[];
   topics: string[];
   createdAt: Date;
   updatedAt: Date;
@@ -158,11 +166,22 @@ async function enrichCandidate(candidate: GitHubTrendingCandidate) {
   }
 
   const repoJson = await repoResponse.json();
-  const contributorsResponse = await fetch(`https://api.github.com/repos/${candidate.fullName}/contributors?per_page=5`, {
+  const contributorsResponse = await fetch(`https://api.github.com/repos/${candidate.fullName}/contributors?per_page=12`, {
     headers: GITHUB_HEADERS,
     next: { revalidate: 60 * 60 },
   });
   const contributors = contributorsResponse.ok ? await contributorsResponse.json() : [];
+  const contributorRecords: GitHubContributorRecord[] = Array.isArray(contributors)
+    ? contributors
+        .map((contributor) => ({
+          login: contributor?.login ?? "",
+          htmlUrl: contributor?.html_url ?? "",
+          type: contributor?.type ?? "User",
+          contributions: Number(contributor?.contributions ?? 0),
+        }))
+        .filter((contributor) => contributor.login && contributor.htmlUrl)
+        .sort((left, right) => right.contributions - left.contributions)
+    : [];
   const readme = await fetchReadme(candidate.fullName);
 
   const record: GitHubRepoRecord = {
@@ -175,7 +194,8 @@ async function enrichCandidate(candidate: GitHubTrendingCandidate) {
     forks: candidate.forks || repoJson.forks_count || 0,
     todayStars: candidate.todayStars,
     contributorAvatarUrls: candidate.contributorAvatarUrls,
-    contributorsCount: Array.isArray(contributors) ? contributors.length : 0,
+    contributorsCount: contributorRecords.length,
+    contributors: contributorRecords,
     topics: repoJson.topics ?? [],
     createdAt: new Date(repoJson.created_at),
     updatedAt: new Date(repoJson.updated_at),

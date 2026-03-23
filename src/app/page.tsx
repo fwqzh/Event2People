@@ -10,6 +10,7 @@ export default async function Home() {
     <div className="page-content">
       <EventBoard
         datasetVersionId={data.datasetVersionId}
+        savedPersonStableIds={data.savedPersonStableIds}
         githubEvents={data.githubEvents}
         arxivEvents={data.arxivEvents}
       />

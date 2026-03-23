@@ -2,6 +2,7 @@ import Link from "next/link";
 import { unstable_noStore as noStore } from "next/cache";
 
 import { HeaderRefreshButton } from "@/components/header-refresh-button";
+import { SiteHeaderShell } from "@/components/site-header-shell";
 import { prisma } from "@/lib/prisma";
 import { ensureActiveDataset } from "@/lib/seed";
 import { formatRefreshTime } from "@/lib/text";
@@ -12,7 +13,7 @@ export async function SiteHeader() {
   const lastUpdatedLabel = activeDataset.publishedAt ? formatRefreshTime(activeDataset.publishedAt) : null;
 
   return (
-    <header className="site-header">
+    <SiteHeaderShell>
       <div className="page-shell site-header__inner">
         <div className="site-header__brand-cluster">
           <Link href="/" className="site-header__brand">
@@ -46,6 +47,6 @@ export async function SiteHeader() {
           <HeaderRefreshButton lastUpdatedLabel={lastUpdatedLabel} />
         </nav>
       </div>
-    </header>
+    </SiteHeaderShell>
   );
 }

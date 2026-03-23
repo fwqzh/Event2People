@@ -44,6 +44,7 @@ export type PersonInput = {
 };
 
 export type ProjectInput = {
+  ownerType?: string | null;
   stableId: string;
   repoName: string;
   repoUrl: string;
@@ -57,6 +58,12 @@ export type ProjectInput = {
   repoUpdatedAt: Date;
   repoDescriptionRaw?: string | null;
   readmeExcerptRaw?: string | null;
+  githubContributors?: Array<{
+    login: string;
+    htmlUrl: string;
+    type: string;
+    contributions: number;
+  }>;
   relatedPaperStableIds?: string[];
 };
 
@@ -148,7 +155,11 @@ export type EventSummaryView = EventInput & {
 
 export type EventDetailView = {
   stableId: string;
-  people: PersonView[];
+  people: Array<
+    PersonView & {
+      contributionCount: number;
+    }
+  >;
   sourceSummaryLabel: string;
   detailSummary: string;
   introSummary: string;

@@ -11,13 +11,14 @@ type PipelineWorkbenchProps = {
 };
 
 export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
+  const [localEntries, setLocalEntries] = useState(entries);
   const [selectedId, setSelectedId] = useState<string | null>(entries[0]?.personStableId ?? null);
   const [status, setStatus] = useState("");
   const selectedEntry = useMemo(
-    () => entries.find((entry) => entry.personStableId === selectedId) ?? entries[0] ?? null,
-    [entries, selectedId],
+    () => localEntries.find((entry) => entry.personStableId === selectedId) ?? localEntries[0] ?? null,
+    [localEntries, selectedId],
   );
-  const contactableCount = useMemo(() => entries.filter((entry) => entry.person.links.length > 0).length, [entries]);
+  const contactableCount = useMemo(() => localEntries.filter((entry) => entry.person.links.length > 0).length, [localEntries]);
 
   function getPersonMeta(entry: PipelineEntryView) {
     return [
@@ -29,6 +30,35 @@ export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
   async function copyText(text: string, successMessage: string) {
     await navigator.clipboard.writeText(text);
     setStatus(successMessage);
+  }
+
+  async function removeFromPipeline(personStableId: string) {
+    setStatus("");
+
+    const response = await fetch("/api/pipeline", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ personStableId }),
+    });
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error ?? "移除失败");
+    }
+
+    setLocalEntries((current) => {
+      const next = current.filter((entry) => entry.personStableId !== personStableId);
+
+      setSelectedId((selected) => {
+        if (selected !== personStableId) {
+          return selected;
+        }
+
+        return next[0]?.personStableId ?? null;
+      });
+
+      return next;
+    });
   }
 
   return (
@@ -43,7 +73,7 @@ export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
         <div className="toolbar-card__cluster">
           <div className="toolbar-pill-group">
             <span className="toolbar-metric-pill">
-              <strong>{entries.length}</strong>
+              <strong>{localEntries.length}</strong>
               <em>Saved people</em>
             </span>
             <span className="toolbar-metric-pill">
@@ -59,7 +89,7 @@ export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
             <button
               type="button"
               className="primary-button"
-              onClick={() => void copyText(buildPipelinePageCopy(entries), "已复制本页摘要")}
+              onClick={() => void copyText(buildPipelinePageCopy(localEntries), "已复制本页摘要")}
             >
               复制本页摘要
             </button>
@@ -69,7 +99,7 @@ export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
 
       <div className="pipeline-grid">
         <div className="pipeline-list">
-          {entries.map((entry) => {
+          {localEntries.map((entry) => {
             const personMeta = getPersonMeta(entry);
 
             return (
@@ -77,6 +107,21 @@ export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
                 key={entry.personStableId}
                 className={`pipeline-card ${selectedEntry?.personStableId === entry.personStableId ? "is-selected" : ""}`}
               >
+                <button
+                  type="button"
+                  className="pipeline-remove-button"
+                  aria-label={`将 ${entry.person.name} 移除出 Pipeline`}
+                  onClick={() => {
+                    void removeFromPipeline(entry.personStableId).catch((error) => {
+                      setStatus(error instanceof Error ? error.message : "移除失败");
+                    });
+                  }}
+                >
+                  <span className="pipeline-remove-button__icon" aria-hidden="true">
+                    ×
+                  </span>
+                  <span className="pipeline-remove-button__label">移除出Pipeline</span>
+                </button>
                 <button type="button" className="pipeline-card__body" onClick={() => setSelectedId(entry.personStableId)}>
                   <span className="pipeline-card__eyebrow">{entry.timeAgo} 加入</span>
                   <h3>{entry.person.name}</h3>
@@ -125,6 +170,7 @@ export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
               </article>
             );
           })}
+          {localEntries.length === 0 ? <div className="empty-state">当前 Pipeline 为空。</div> : null}
         </div>
 
         <aside className="detail-workbench">
