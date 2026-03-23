@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { unstable_noStore as noStore } from "next/cache";
 
-import { HeaderRefreshButton } from "@/components/header-refresh-button";
 import { SiteHeaderShell } from "@/components/site-header-shell";
+import { SiteNav } from "@/components/site-nav";
 import { prisma } from "@/lib/prisma";
 import { ensureActiveDataset } from "@/lib/seed";
 import { formatRefreshTime } from "@/lib/text";
@@ -37,15 +37,7 @@ export async function SiteHeader() {
           </Link>
         </div>
 
-        <nav className="site-nav" aria-label="主导航">
-          <Link href="/" className="primary-button site-nav__button">
-            Event Board
-          </Link>
-          <Link href="/pipeline" className="primary-button site-nav__button">
-            Pipeline
-          </Link>
-          <HeaderRefreshButton lastUpdatedLabel={lastUpdatedLabel} />
-        </nav>
+        <SiteNav lastUpdatedLabel={lastUpdatedLabel} />
       </div>
     </SiteHeaderShell>
   );

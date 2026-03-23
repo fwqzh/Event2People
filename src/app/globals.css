@@ -3051,6 +3051,10 @@ body > .site-header {
 }
 
 .site-nav .site-nav__button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 44px;
   padding: 0 14px;
   border: 1px solid transparent;
@@ -3058,6 +3062,24 @@ body > .site-header {
   background: transparent;
   color: rgba(248, 241, 228, 0.88);
   box-shadow: none;
+}
+
+.site-nav .site-nav__button.is-active {
+  color: #fff7ea;
+}
+
+.site-nav .site-nav__button.is-active::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 2px;
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(242, 223, 159, 0.96), rgba(215, 200, 146, 0.96));
+  box-shadow:
+    0 0 0 1px rgba(215, 200, 146, 0.12),
+    0 4px 10px rgba(168, 137, 72, 0.18);
 }
 
 .site-nav .site-nav__button:hover,
@@ -3182,6 +3204,15 @@ body > .site-header {
   opacity: 0.38;
   filter: saturate(0.7) blur(2.4px);
   transform: scale(0.992);
+}
+
+.event-card.is-dimmed:hover,
+.event-card.is-dimmed:focus-visible,
+.event-card.is-dimmed:focus-within {
+  opacity: 0.96;
+  filter: saturate(1) blur(0);
+  transform: translateY(-4px) scale(1);
+  z-index: 4;
 }
 
 .detail-workbench .detail-panel p,

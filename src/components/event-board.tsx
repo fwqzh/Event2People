@@ -274,12 +274,36 @@ export function EventBoard({ datasetVersionId, savedPersonStableIds, githubEvent
     }));
   }
 
+  function hasActiveTextSelection(container: HTMLElement | null) {
+    if (!container || typeof window === "undefined") {
+      return false;
+    }
+
+    const selection = window.getSelection();
+
+    if (!selection || selection.isCollapsed || !selection.toString().trim()) {
+      return false;
+    }
+
+    const anchorNode = selection.anchorNode;
+    const focusNode = selection.focusNode;
+
+    return Boolean(
+      (anchorNode && container.contains(anchorNode)) ||
+        (focusNode && container.contains(focusNode)),
+    );
+  }
+
   function shouldIgnoreCardToggle(target: EventTarget | null) {
     return target instanceof HTMLElement && Boolean(target.closest("a, button, summary, details"));
   }
 
-  function handleCardClick(stableId: string, target: EventTarget | null) {
+  function handleCardClick(stableId: string, target: EventTarget | null, currentTarget: HTMLElement | null) {
     if (shouldIgnoreCardToggle(target)) {
+      return;
+    }
+
+    if (hasActiveTextSelection(currentTarget)) {
       return;
     }
 
@@ -491,7 +515,13 @@ export function EventBoard({ datasetVersionId, savedPersonStableIds, githubEvent
                 <div key={event.stableId} className={`event-stack ${isExpanded ? "is-expanded" : ""}`}>
                   <article
                     className={`event-card ${isExpanded ? "is-expanded" : ""} ${isDimmed ? "is-dimmed" : ""}`}
-                    onClick={(clickEvent) => handleCardClick(event.stableId, clickEvent.target)}
+                    onClick={(clickEvent) =>
+                      handleCardClick(
+                        event.stableId,
+                        clickEvent.target,
+                        clickEvent.currentTarget,
+                      )
+                    }
                     onKeyDown={(keyboardEvent) => {
                       if (keyboardEvent.target !== keyboardEvent.currentTarget) {
                         return;
