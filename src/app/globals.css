@@ -441,6 +441,17 @@ select {
   font-size: 0.72em;
 }
 
+.board-section__title-link {
+  color: inherit;
+  text-decoration: none;
+  transition: color 180ms ease;
+}
+
+.board-section__title-link:hover,
+.board-section__title-link:focus-visible {
+  color: var(--teal);
+}
+
 .board-section__copy {
   margin-top: 12px;
   color: var(--muted);

@@ -17,6 +17,7 @@ type EventBoardProps = {
 
 const DEFAULT_VISIBLE_COUNT = 10;
 const PREVIEW_PEOPLE_LIMIT = 3;
+const EXPANDED_EVENT_STORAGE_KEY = "event-board-expanded-id";
 const SECTION_CONFIG: Record<
   EventSource,
   {
@@ -24,6 +25,7 @@ const SECTION_CONFIG: Record<
     kicker: string;
     status: string;
     description: string;
+    externalUrl?: string;
   }
 > = {
   github: {
@@ -31,6 +33,7 @@ const SECTION_CONFIG: Record<
     kicker: "Build / Execution",
     status: "GitHub Trending Daily",
     description: "基于 GitHub 官方 Trending Daily 页面动态解析，按 today stars 排序后展示 Top 10 项目事件。",
+    externalUrl: "https://github.com/trending?since=daily",
   },
   arxiv: {
     title: "ArXiv Trending",
@@ -45,6 +48,7 @@ export function EventBoard({ datasetVersionId, savedPersonStableIds, githubEvent
   const detailRequestRef = useRef<{ stableId: string; controller: AbortController } | null>(null);
   const [serverSavedPersonIds, setServerSavedPersonIds] = useState<string[]>(savedPersonStableIds);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [isExpandedIdHydrated, setIsExpandedIdHydrated] = useState(false);
   const [visibleCounts, setVisibleCounts] = useState<Record<EventSource, number>>({
     github: DEFAULT_VISIBLE_COUNT,
     arxiv: DEFAULT_VISIBLE_COUNT,
@@ -160,6 +164,35 @@ export function EventBoard({ datasetVersionId, savedPersonStableIds, githubEvent
   useEffect(() => {
     setServerSavedPersonIds(savedPersonStableIds);
   }, [savedPersonStableIds]);
+
+  useEffect(() => {
+    if (isExpandedIdHydrated) {
+      return;
+    }
+
+    const storedExpandedId = window.sessionStorage.getItem(EXPANDED_EVENT_STORAGE_KEY);
+
+    if (storedExpandedId && allEvents.some((event) => event.stableId === storedExpandedId)) {
+      setExpandedId(storedExpandedId);
+    } else if (storedExpandedId) {
+      window.sessionStorage.removeItem(EXPANDED_EVENT_STORAGE_KEY);
+    }
+
+    setIsExpandedIdHydrated(true);
+  }, [allEvents, isExpandedIdHydrated]);
+
+  useEffect(() => {
+    if (!isExpandedIdHydrated) {
+      return;
+    }
+
+    if (expandedId && allEvents.some((event) => event.stableId === expandedId)) {
+      window.sessionStorage.setItem(EXPANDED_EVENT_STORAGE_KEY, expandedId);
+      return;
+    }
+
+    window.sessionStorage.removeItem(EXPANDED_EVENT_STORAGE_KEY);
+  }, [allEvents, expandedId, isExpandedIdHydrated]);
 
   useEffect(() => {
     abortDetailRequest();
@@ -447,7 +480,14 @@ export function EventBoard({ datasetVersionId, savedPersonStableIds, githubEvent
                 <span className="board-section__toggle-icon" aria-hidden="true" />
               </button>
               <h2>
-                {config.title} <span>· {events.length} 条近期事件</span>
+                {config.externalUrl ? (
+                  <Link href={config.externalUrl} className="board-section__title-link" target="_blank" rel="noreferrer">
+                    {config.title}
+                  </Link>
+                ) : (
+                  config.title
+                )}{" "}
+                <span>· {events.length} 条近期事件</span>
               </h2>
             </div>
             <p className="board-section__copy">{config.description}</p>
@@ -818,8 +858,8 @@ export function EventBoard({ datasetVersionId, savedPersonStableIds, githubEvent
 
   return (
     <div className="board-layout">
-      {renderSection("github", githubEvents)}
       {renderSection("arxiv", arxivEvents)}
+      {renderSection("github", githubEvents)}
     </div>
   );
 }
