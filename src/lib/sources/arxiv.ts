@@ -96,7 +96,10 @@ const VENUE_BONUS_RULES: Array<{ pattern: RegExp; bonus: number }> = [
   { pattern: /\bEMNLP\b/i, bonus: 36 },
 ];
 const ACCEPTANCE_SIGNAL_BONUS = 18;
-const MAX_CANDIDATES = 80;
+const ARXIV_SEARCH_WINDOW_DAYS = 90;
+const ARXIV_CANDIDATE_FETCH_LIMIT = 200;
+const ARXIV_PDF_ENRICH_HEAD_LIMIT = 15;
+const ARXIV_PDF_ENRICH_CONCURRENCY = 5;
 const SEMANTIC_SCHOLAR_BATCH_SIZE = 40;
 const ARXIV_RETRY_DELAYS_MS = [1500, 4000];
 const ARXIV_REQUEST_TIMEOUT_MS = 12_000;
@@ -126,7 +129,7 @@ function pad2(value: number) {
 }
 
 function buildSubmittedDateWindow(now = new Date()) {
-  const start = subDays(now, 30);
+  const start = subDays(now, ARXIV_SEARCH_WINDOW_DAYS);
   const startUtc = `${start.getUTCFullYear()}${pad2(start.getUTCMonth() + 1)}${pad2(start.getUTCDate())}0000`;
   const endUtc = `${now.getUTCFullYear()}${pad2(now.getUTCMonth() + 1)}${pad2(now.getUTCDate())}2359`;
 
@@ -243,7 +246,7 @@ async function fetchArxivCandidates(now = new Date()) {
     sortBy: "submittedDate",
     sortOrder: "descending",
     start: "0",
-    max_results: String(MAX_CANDIDATES),
+    max_results: String(ARXIV_CANDIDATE_FETCH_LIMIT),
   });
   const url = `https://export.arxiv.org/api/query?${params.toString()}`;
   let lastError: Error | null = null;
@@ -354,11 +357,39 @@ async function enrichWithSemanticScholar(records: RawArxivPaperRecord[]) {
 }
 
 async function enrichWithPdfData(records: ArxivPaperRecord[]) {
-  const results = await Promise.allSettled(
-    records.map(async (record) => ({
-      arxivId: record.arxivId,
-      pdfPaperData: await extractPaperDataFromPdf(record.pdfUrl, record.authors),
-    })),
+  const results: PromiseSettledResult<{
+    arxivId: string;
+    pdfPaperData: {
+      authors: string[];
+      emails: string[];
+      institutionNamesRaw: string[];
+      pdfTextRaw: string;
+    };
+  }>[] = new Array(records.length);
+  let nextIndex = 0;
+
+  await Promise.all(
+    Array.from({ length: Math.min(ARXIV_PDF_ENRICH_CONCURRENCY, records.length) }, async () => {
+      while (nextIndex < records.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+
+        try {
+          results[currentIndex] = {
+            status: "fulfilled",
+            value: {
+              arxivId: records[currentIndex]!.arxivId,
+              pdfPaperData: await extractPaperDataFromPdf(records[currentIndex]!.pdfUrl, records[currentIndex]!.authors),
+            },
+          };
+        } catch (error) {
+          results[currentIndex] = {
+            status: "rejected",
+            reason: error,
+          };
+        }
+      }
+    }),
   );
 
   const pdfDataByArxivId = new Map<
@@ -409,7 +440,9 @@ export async function fetchArxivPapers(limit = 10) {
         authorEmailsRaw: [],
         institutionNamesRaw: [],
       }));
-    const topRecords = await enrichWithPdfData(rankedRecords);
+    const headRecords = rankedRecords.slice(0, ARXIV_PDF_ENRICH_HEAD_LIMIT);
+    const tailRecords = rankedRecords.slice(ARXIV_PDF_ENRICH_HEAD_LIMIT);
+    const topRecords = [...(await enrichWithPdfData(headRecords)), ...tailRecords];
 
     if (topRecords.length > 0) {
       arxivCache = {

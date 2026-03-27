@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { startTransition, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 
 import type { EventAnalysisView, EventDetailView, EventSummaryView, PersonView } from "@/lib/types";
@@ -14,13 +15,33 @@ type EventBoardProps = {
   githubEvents: EventSummaryView[];
   arxivEvents: EventSummaryView[];
   visibleSources?: EventSource[];
+  enableArxivFilters?: boolean;
 };
 
 const DEFAULT_VISIBLE_COUNT = 10;
+const ARXIV_VISIBLE_LIMIT = 20;
 const PREVIEW_PEOPLE_LIMIT = 3;
 const EXPANDED_EVENT_STORAGE_KEY = "event-board-expanded-id";
 const WARMUP_GITHUB_COUNT = 3;
 const DETAIL_LOADING_DELAY_MS = 180;
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
+const ARXIV_TIME_WINDOWS = [
+  { value: "all", label: "全部" },
+  { value: "7d", label: "7天" },
+  { value: "30d", label: "30天" },
+  { value: "90d", label: "90天" },
+] as const;
+
+type ArxivTimeWindow = (typeof ARXIV_TIME_WINDOWS)[number]["value"];
+const ARXIV_CATEGORY_OPTIONS = [
+  { value: "agent", label: "Agent" },
+  { value: "world-model", label: "World Model" },
+  { value: "embodied-intelligence", label: "Embodied Intelligence" },
+  { value: "others", label: "Others" },
+] as const;
+
+type ArxivCategory = (typeof ARXIV_CATEGORY_OPTIONS)[number]["value"];
+
 const SECTION_CONFIG: Record<
   EventSource,
   {
@@ -43,9 +64,99 @@ const SECTION_CONFIG: Record<
     kicker: "Research / Entry",
     status: "arXiv + Semantic Scholar",
     description:
-      "基于最近 30 天 arXiv 候选论文，经具身智能主题过滤后，再结合 Semantic Scholar 引用、venue 信号和新鲜度得到启发式 Top 10。",
+      "基于最近 90 天 arXiv 候选论文构建 50 篇活跃论文池，再结合 Semantic Scholar 引用、venue 信号和新鲜度排序；当前页支持严格筛选后默认展示前 20 篇。",
   },
 };
+
+function getDefaultVisibleCount(source: EventSource) {
+  return source === "arxiv" ? ARXIV_VISIBLE_LIMIT : DEFAULT_VISIBLE_COUNT;
+}
+
+function normalizeArxivTimeWindow(value: string | null | undefined): ArxivTimeWindow {
+  return ARXIV_TIME_WINDOWS.some((windowOption) => windowOption.value === value) ? (value as ArxivTimeWindow) : "all";
+}
+
+function normalizeArxivCategories(value: string | null | undefined) {
+  const requested = (value ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const requestedSet = new Set(requested);
+
+  return ARXIV_CATEGORY_OPTIONS.map((option) => option.value).filter((value) => requestedSet.has(value));
+}
+
+function compactFilterValue(value: string | null | undefined) {
+  return value?.trim() ?? "";
+}
+
+function toEventTimestamp(event: EventSummaryView) {
+  return new Date(event.timePrimary).getTime();
+}
+
+function buildArxivFilterHaystack(event: EventSummaryView) {
+  return [
+    event.cardTitle,
+    event.eventTag,
+    event.cardSummary,
+    event.paperSummaryMetadata?.topic ?? "",
+    ...(event.paperSummaryMetadata?.keywords ?? []),
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
+function mapLegacyTopicToCategories(value: string | null | undefined): ArxivCategory[] {
+  const normalized = compactFilterValue(value).toLowerCase();
+
+  if (!normalized) {
+    return [];
+  }
+
+  if (normalized.includes("world model") || normalized.includes("环境建模")) {
+    return ["world-model"];
+  }
+
+  if (normalized.includes("agent")) {
+    return ["agent"];
+  }
+
+  if (normalized.includes("embodied") || normalized.includes("机器人") || normalized.includes("具身")) {
+    return ["embodied-intelligence"];
+  }
+
+  return ["others"];
+}
+
+function getArxivCategories(event: EventSummaryView): ArxivCategory[] {
+  const haystack = buildArxivFilterHaystack(event);
+  const categories: ArxivCategory[] = [];
+
+  if (
+    event.eventTag === "AI Agent" ||
+    event.eventTag === "Coding Agent" ||
+    /\bagent\b|\bbot\b|tool use|computer use|coding agent/i.test(haystack)
+  ) {
+    categories.push("agent");
+  }
+
+  if (
+    event.eventTag === "World Model" ||
+    /world model|simulation|simulator|sim-to-real|\bwm\b/i.test(haystack)
+  ) {
+    categories.push("world-model");
+  }
+
+  if (
+    event.eventTag === "Embodied AI" ||
+    event.eventTag === "Robotics" ||
+    /embodied|robot|robotics|manipulation|humanoid|locomotion|navigation|具身|机器人/i.test(haystack)
+  ) {
+    categories.push("embodied-intelligence");
+  }
+
+  return categories.length > 0 ? categories : ["others"];
+}
 
 export function EventBoard({
   datasetVersionId,
@@ -53,19 +164,27 @@ export function EventBoard({
   githubEvents,
   arxivEvents,
   visibleSources,
+  enableArxivFilters = false,
 }: EventBoardProps) {
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const detailRequestControllersRef = useRef<Map<string, AbortController>>(new Map());
   const analysisRequestControllersRef = useRef<Map<string, AbortController>>(new Map());
   const detailLoadingTimerRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const warmedEventIdsRef = useRef<Set<string>>(new Set());
   const detailLoadTokenRef = useRef<Map<string, number>>(new Map());
   const analysisLoadTokenRef = useRef<Map<string, number>>(new Map());
+  const [arxivFilterNowTs] = useState(() => Date.now());
+  const searchParamsTime = searchParams.get("time");
+  const searchParamsTopic = searchParams.get("topic");
+  const searchParamsCategories = searchParams.get("categories");
   const [serverSavedPersonIds, setServerSavedPersonIds] = useState<string[]>(savedPersonStableIds);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [isExpandedIdHydrated, setIsExpandedIdHydrated] = useState(false);
   const [visibleCounts, setVisibleCounts] = useState<Record<EventSource, number>>({
     github: DEFAULT_VISIBLE_COUNT,
-    arxiv: DEFAULT_VISIBLE_COUNT,
+    arxiv: ARXIV_VISIBLE_LIMIT,
   });
   const [collapsedSections, setCollapsedSections] = useState<Record<EventSource, boolean>>({
     github: false,
@@ -82,10 +201,55 @@ export function EventBoard({
   const [analysisErrorById, setAnalysisErrorById] = useState<Record<string, string>>({});
   const [detailReloadTokenById, setDetailReloadTokenById] = useState<Record<string, number>>({});
   const [expandedPeopleByEventId, setExpandedPeopleByEventId] = useState<Record<string, boolean>>({});
+  const [arxivTimeWindow, setArxivTimeWindow] = useState<ArxivTimeWindow>(() => normalizeArxivTimeWindow(searchParamsTime));
+  const [arxivCategories, setArxivCategories] = useState<ArxivCategory[]>(
+    () => normalizeArxivCategories(searchParamsCategories).length > 0
+      ? normalizeArxivCategories(searchParamsCategories)
+      : mapLegacyTopicToCategories(searchParamsTopic),
+  );
   const [status, setStatus] = useState("");
-  const sectionsToRender = visibleSources?.length ? [...new Set(visibleSources)] : (["github", "arxiv"] as EventSource[]);
+  const sectionsToRender = useMemo(
+    () => (visibleSources?.length ? [...new Set(visibleSources)] : (["github", "arxiv"] as EventSource[])),
+    [visibleSources],
+  );
 
   const allEvents = useMemo(() => [...githubEvents, ...arxivEvents], [arxivEvents, githubEvents]);
+  const selectedArxivCategories = useMemo(() => new Set(arxivCategories), [arxivCategories]);
+  const filteredArxivEvents = useMemo(() => {
+    if (!enableArxivFilters) {
+      return arxivEvents;
+    }
+
+    return arxivEvents.filter((event) => {
+      const publishedAtTs = event.paperSummaryMetadata?.publishedAtTs || toEventTimestamp(event);
+
+      if (arxivTimeWindow !== "all") {
+        const maxAgeDays = Number(arxivTimeWindow.replace("d", ""));
+
+        if (!Number.isFinite(maxAgeDays) || publishedAtTs < arxivFilterNowTs - maxAgeDays * DAY_IN_MS) {
+          return false;
+        }
+      }
+
+      if (selectedArxivCategories.size > 0) {
+        const eventCategories = getArxivCategories(event);
+
+        if (!eventCategories.some((category) => selectedArxivCategories.has(category))) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }, [arxivEvents, arxivFilterNowTs, arxivTimeWindow, enableArxivFilters, selectedArxivCategories]);
+  const hasActiveArxivFilters = enableArxivFilters && (arxivTimeWindow !== "all" || arxivCategories.length > 0);
+  const renderedSectionEvents = useMemo(
+    () =>
+      sectionsToRender.flatMap((source) =>
+        source === "github" ? githubEvents : enableArxivFilters ? filteredArxivEvents : arxivEvents,
+      ),
+    [arxivEvents, enableArxivFilters, filteredArxivEvents, githubEvents, sectionsToRender],
+  );
   const savedPersonIds = useMemo(() => {
     const ids = new Set<string>(serverSavedPersonIds);
     newlySavedPersonIds.forEach((personStableId) => ids.add(personStableId));
@@ -372,33 +536,91 @@ export function EventBoard({
   }, [savedPersonStableIds]);
 
   useEffect(() => {
+    if (!enableArxivFilters) {
+      return;
+    }
+
+    const nextTimeWindow = normalizeArxivTimeWindow(searchParamsTime);
+    const nextCategories = normalizeArxivCategories(searchParamsCategories).length > 0
+      ? normalizeArxivCategories(searchParamsCategories)
+      : mapLegacyTopicToCategories(searchParamsTopic);
+
+    setArxivTimeWindow((current) => (current === nextTimeWindow ? current : nextTimeWindow));
+    setArxivCategories((current) => (current.join(",") === nextCategories.join(",") ? current : nextCategories));
+  }, [enableArxivFilters, searchParamsCategories, searchParamsTime, searchParamsTopic]);
+
+  useEffect(() => {
+    if (!enableArxivFilters) {
+      return;
+    }
+
+    const params = new URLSearchParams(searchParams.toString());
+
+    if (arxivTimeWindow === "all") {
+      params.delete("time");
+    } else {
+      params.set("time", arxivTimeWindow);
+    }
+
+    params.delete("topic");
+    params.delete("q");
+
+    if (arxivCategories.length === 0) {
+      params.delete("categories");
+    } else {
+      params.set("categories", arxivCategories.join(","));
+    }
+
+    const nextQueryString = params.toString();
+    const currentQueryString = searchParams.toString();
+
+    if (nextQueryString === currentQueryString) {
+      return;
+    }
+
+    startTransition(() => {
+      router.replace(nextQueryString ? `${pathname}?${nextQueryString}` : pathname, { scroll: false });
+    });
+  }, [arxivCategories, arxivTimeWindow, enableArxivFilters, pathname, router, searchParams]);
+
+  useEffect(() => {
+    if (!enableArxivFilters) {
+      return;
+    }
+
+    setVisibleCounts((current) =>
+      current.arxiv === ARXIV_VISIBLE_LIMIT ? current : { ...current, arxiv: ARXIV_VISIBLE_LIMIT },
+    );
+  }, [arxivCategories, arxivTimeWindow, enableArxivFilters]);
+
+  useEffect(() => {
     if (isExpandedIdHydrated) {
       return;
     }
 
     const storedExpandedId = window.sessionStorage.getItem(EXPANDED_EVENT_STORAGE_KEY);
 
-    if (storedExpandedId && allEvents.some((event) => event.stableId === storedExpandedId)) {
+    if (storedExpandedId && renderedSectionEvents.some((event) => event.stableId === storedExpandedId)) {
       setExpandedId(storedExpandedId);
     } else if (storedExpandedId) {
       window.sessionStorage.removeItem(EXPANDED_EVENT_STORAGE_KEY);
     }
 
     setIsExpandedIdHydrated(true);
-  }, [allEvents, isExpandedIdHydrated]);
+  }, [isExpandedIdHydrated, renderedSectionEvents]);
 
   useEffect(() => {
     if (!isExpandedIdHydrated) {
       return;
     }
 
-    if (expandedId && allEvents.some((event) => event.stableId === expandedId)) {
+    if (expandedId && renderedSectionEvents.some((event) => event.stableId === expandedId)) {
       window.sessionStorage.setItem(EXPANDED_EVENT_STORAGE_KEY, expandedId);
       return;
     }
 
     window.sessionStorage.removeItem(EXPANDED_EVENT_STORAGE_KEY);
-  }, [allEvents, expandedId, isExpandedIdHydrated]);
+  }, [expandedId, isExpandedIdHydrated, renderedSectionEvents]);
 
   useEffect(() => {
     abortDetailRequest();
@@ -416,6 +638,10 @@ export function EventBoard({
     setRemovedPersonIds(new Set());
     setNewlySavedPersonIds(new Set());
     setAnalysisById({});
+    setVisibleCounts({
+      github: DEFAULT_VISIBLE_COUNT,
+      arxiv: ARXIV_VISIBLE_LIMIT,
+    });
     warmedEventIdsRef.current.clear();
     detailLoadTokenRef.current.clear();
     analysisLoadTokenRef.current.clear();
@@ -452,6 +678,12 @@ export function EventBoard({
       setExpandedId(null);
     }
   }, [allEvents, expandedId]);
+
+  useEffect(() => {
+    if (expandedId && !renderedSectionEvents.some((event) => event.stableId === expandedId)) {
+      setExpandedId(null);
+    }
+  }, [expandedId, renderedSectionEvents]);
 
   const expandedReloadToken = expandedId ? detailReloadTokenById[expandedId] ?? 0 : 0;
 
@@ -731,25 +963,48 @@ export function EventBoard({
   function toggleVisibleCount(source: EventSource, totalCount: number) {
     setVisibleCounts((current) => {
       const visibleCount = current[source];
+      const defaultVisibleCount = getDefaultVisibleCount(source);
 
       return {
         ...current,
         [source]:
           visibleCount >= totalCount
-            ? DEFAULT_VISIBLE_COUNT
-            : Math.min(visibleCount + DEFAULT_VISIBLE_COUNT, totalCount),
+            ? defaultVisibleCount
+            : Math.min(visibleCount + defaultVisibleCount, totalCount),
       };
     });
+  }
+
+  function clearArxivFilters() {
+    setArxivTimeWindow("all");
+    setArxivCategories([]);
+  }
+
+  function toggleArxivTimeWindow(nextTimeWindow: ArxivTimeWindow, checked: boolean) {
+    setArxivTimeWindow(checked ? nextTimeWindow : "all");
+  }
+
+  function toggleArxivCategory(category: ArxivCategory, checked: boolean) {
+    setArxivCategories((current) =>
+      checked
+        ? normalizeArxivCategories([...current, category].join(","))
+        : current.filter((item) => item !== category),
+    );
   }
 
   function renderSection(source: EventSource, events: EventSummaryView[]) {
     const config = SECTION_CONFIG[source];
     const isCollapsed = collapsedSections[source];
+    const displayedEvents = source === "arxiv" && enableArxivFilters ? filteredArxivEvents : events;
+    const totalDisplayedCount = displayedEvents.length;
     const visibleCount = visibleCounts[source];
-    const visibleEvents = events.slice(0, visibleCount);
+    const defaultVisibleCount = getDefaultVisibleCount(source);
+    const visibleEvents = displayedEvents.slice(0, visibleCount);
     const sectionPersonIds = new Set(events.flatMap((event) => event.personStableIds));
     const sectionPeopleCount = sectionPersonIds.size;
     const savedInSectionCount = [...sectionPersonIds].filter((personStableId) => savedPersonIds.has(personStableId)).length;
+    const showArxivFilters = source === "arxiv" && enableArxivFilters;
+    const showArxivUnderflowNotice = showArxivFilters && hasActiveArxivFilters && totalDisplayedCount < ARXIV_VISIBLE_LIMIT;
 
     return (
       <section className="board-section" key={source} id={`section-${source}`}>
@@ -800,18 +1055,78 @@ export function EventBoard({
             </div>
 
             <div className="board-section__actions">
-              {!isCollapsed && events.length > 10 ? (
-                <button type="button" className="ghost-button" onClick={() => toggleVisibleCount(source, events.length)}>
-                  {visibleCount >= events.length ? "收起列表" : "查看更多"}
+              {!isCollapsed && totalDisplayedCount > defaultVisibleCount ? (
+                <button type="button" className="ghost-button" onClick={() => toggleVisibleCount(source, totalDisplayedCount)}>
+                  {visibleCount >= totalDisplayedCount ? "收起列表" : showArxivFilters ? "查看更多结果" : "查看更多"}
                 </button>
               ) : null}
             </div>
           </div>
         </div>
 
+        {showArxivFilters ? (
+          <div className="arxiv-filter-shell">
+            <div className="arxiv-filter-group" role="group" aria-label="论文时间筛选">
+              <span className="arxiv-filter-group__label">时间</span>
+              <div className="arxiv-filter-group__checks">
+                {ARXIV_TIME_WINDOWS.map((windowOption) => (
+                  <label
+                    key={windowOption.value}
+                    className={`filter-checkbox ${arxivTimeWindow === windowOption.value ? "is-active" : ""}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={arxivTimeWindow === windowOption.value}
+                      onChange={(changeEvent) => toggleArxivTimeWindow(windowOption.value, changeEvent.target.checked)}
+                    />
+                    <span className="filter-checkbox__control" aria-hidden="true" />
+                    <span className="filter-checkbox__label">{windowOption.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="arxiv-filter-group" role="group" aria-label="论文类目筛选">
+              <span className="arxiv-filter-group__label">类目</span>
+              <div className="arxiv-filter-group__checks">
+                {ARXIV_CATEGORY_OPTIONS.map((categoryOption) => (
+                  <label
+                    key={categoryOption.value}
+                    className={`filter-checkbox ${selectedArxivCategories.has(categoryOption.value) ? "is-active" : ""}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedArxivCategories.has(categoryOption.value)}
+                      onChange={(changeEvent) => toggleArxivCategory(categoryOption.value, changeEvent.target.checked)}
+                    />
+                    <span className="filter-checkbox__control" aria-hidden="true" />
+                    <span className="filter-checkbox__label">{categoryOption.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="arxiv-filter-toolbar">
+              <p className="arxiv-filter-summary">
+                {totalDisplayedCount} / {arxivEvents.length} 篇匹配
+              </p>
+              <button type="button" className="ghost-button" onClick={clearArxivFilters}>
+                清空筛选
+              </button>
+            </div>
+
+            {showArxivUnderflowNotice ? (
+              <p className="arxiv-filter-note">
+                当前仅找到 {totalDisplayedCount} 篇符合条件的论文。可尝试放宽时间窗，或清空类目筛选。
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
         {!isCollapsed ? (
-          <div className="event-list">
-            {visibleEvents.map((event) => {
+          visibleEvents.length > 0 ? (
+            <div className="event-list">
+              {visibleEvents.map((event) => {
               const isExpanded = expandedId === event.stableId;
               const isDimmed = expandedId !== null && expandedId !== event.stableId;
               const detail = detailsById[event.stableId];
@@ -1369,8 +1684,13 @@ export function EventBoard({
                   </article>
                 </div>
               );
-            })}
-          </div>
+              })}
+            </div>
+          ) : (
+            <div className="empty-state">
+              当前没有匹配论文。
+            </div>
+          )
         ) : (
           <div className="board-section__collapsed">
             <p>该板块已折叠。展开后继续查看事件、人物与来源。</p>

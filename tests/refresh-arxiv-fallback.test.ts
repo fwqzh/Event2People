@@ -62,6 +62,19 @@ describe("refresh arxiv fallback", () => {
     expect(prisma.datasetVersion.findFirst).not.toHaveBeenCalled();
   });
 
+  it("requests a 50-paper arxiv pool by default", async () => {
+    vi.mocked(fetchArxivPapers).mockResolvedValue([]);
+
+    const prisma = {
+      datasetVersion: { findFirst: vi.fn() },
+      event: { findMany: vi.fn() },
+    };
+
+    await loadArxivPapersForRefresh(prisma as never);
+
+    expect(fetchArxivPapers).toHaveBeenCalledWith(50);
+  });
+
   it("falls back to the active dataset when the upstream arxiv fetch fails", async () => {
     vi.mocked(fetchArxivPapers).mockRejectedValue(new Error("arXiv fetch failed and no cached result is available"));
 
@@ -175,6 +188,19 @@ describe("refresh arxiv fallback", () => {
       stars: 1200,
     });
     expect(prisma.datasetVersion.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("keeps the github default fetch size at 10", async () => {
+    vi.mocked(fetchGitHubTrendingRepos).mockResolvedValue([]);
+
+    const prisma = {
+      datasetVersion: { findFirst: vi.fn() },
+      event: { findMany: vi.fn() },
+    };
+
+    await loadGitHubProjectsForRefresh(prisma as never);
+
+    expect(fetchGitHubTrendingRepos).toHaveBeenCalledWith(10);
   });
 
   it("falls back to the active dataset when the upstream github fetch fails", async () => {

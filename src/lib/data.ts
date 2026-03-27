@@ -132,6 +132,7 @@ type ActiveEventRecord = Prisma.EventGetPayload<{
 
 const CARD_SOURCE_SUMMARY_LIMIT = 220;
 const DETAIL_SOURCE_SUMMARY_LIMIT = 560;
+const HOMEPAGE_VISIBLE_LIMIT = 10;
 const countFormatter = new Intl.NumberFormat("en-US");
 
 function normalizeHomepageMetrics(
@@ -269,17 +270,14 @@ function getPersonPrimaryInstitution(
   );
 }
 
-function buildArxivMetadata(
-  event: Pick<ActiveEventRecord, "eventTag">,
+function buildArxivSummaryMetadata(
+  event: Pick<HomepageEventRecord, "eventTag"> | Pick<ActiveEventRecord, "eventTag">,
   paper: PaperRecord | undefined,
-  people: ActiveEventRecord["personLinks"],
 ) {
   if (!paper) {
     return {
       publishedAtLabel: "",
-      authors: [],
-      authorEmails: [],
-      institutions: [],
+      publishedAtTs: 0,
       keywords: [],
       topic: event.eventTag as EventSummaryView["eventTag"],
     };
@@ -291,6 +289,31 @@ function buildArxivMetadata(
     abstractRaw: paper.abstractRaw,
     eventTag: event.eventTag as EventSummaryView["eventTag"],
   });
+
+  return {
+    publishedAtLabel: formatDay(paper.publishedAt),
+    publishedAtTs: paper.publishedAt.getTime(),
+    keywords: topicView.keywords,
+    topic: topicView.topic,
+  };
+}
+
+function buildArxivMetadata(
+  event: Pick<ActiveEventRecord, "eventTag">,
+  paper: PaperRecord | undefined,
+  people: ActiveEventRecord["personLinks"],
+) {
+  const summaryMetadata = buildArxivSummaryMetadata(event, paper);
+
+  if (!paper) {
+    return {
+      ...summaryMetadata,
+      authors: [],
+      authorEmails: [],
+      institutions: [],
+    };
+  }
+
   const authors = [...new Set(readStringArray(paper.authorsJson))];
   const authorEmails = [...new Set(readStringArray(paper.authorEmailsRaw))];
   const institutionsFromPaper = readStringArray(paper.institutionNamesRaw).map((value) => compactInstitution(value));
@@ -298,12 +321,10 @@ function buildArxivMetadata(
   const institutions = institutionsFromPaper.length > 0 ? institutionsFromPaper : institutionsFromPeople;
 
   return {
-    publishedAtLabel: formatDay(paper.publishedAt),
+    ...summaryMetadata,
     authors,
     authorEmails,
     institutions: [...new Set(institutions)].slice(0, 3),
-    keywords: topicView.keywords,
-    topic: topicView.topic,
   };
 }
 
@@ -414,6 +435,7 @@ function mapEventSummary(
     event.sourceType === "github"
       ? getGitHubNarrativeSummary(event, projects[0], safeHighlight)
       : clampCopy(arxivNarrative?.lead ?? buildSourceSummary(event.sourceType, projects[0], papers[0], safeHighlight, CARD_SOURCE_SUMMARY_LIMIT), CARD_SOURCE_SUMMARY_LIMIT);
+  const paperSummaryMetadata = event.sourceType === "arxiv" ? buildArxivSummaryMetadata(event, papers[0]) : null;
 
   return {
     stableId: event.stableId,
@@ -440,6 +462,7 @@ function mapEventSummary(
     peopleCount: event.personLinks.length,
     isSaved: event.personLinks.some((link) => savedPeople.has(link.person.stableId)),
     cardSummary,
+    paperSummaryMetadata,
   };
 }
 
@@ -492,7 +515,7 @@ function mapEventDetail(
   };
 }
 
-export async function getHomepageData() {
+async function getBoardData(options?: { githubLimit?: number; arxivLimit?: number }) {
   const activeDataset = await ensureActiveDataset(prisma);
   const savedEntries = await prisma.pipelineEntry.findMany({
     select: { personStableId: true },
@@ -543,18 +566,34 @@ export async function getHomepageData() {
   const githubEvents = mappedEvents
     .filter((event) => event.sourceType === "github")
     .sort((left, right) => extractTodayStars(right.metrics) - extractTodayStars(left.metrics))
-    .slice(0, 10)
+    .slice(0, options?.githubLimit ?? HOMEPAGE_VISIBLE_LIMIT)
     .map((event, index) => ({
       ...event,
       displayRank: index + 1,
     }));
+  const arxivEvents = mappedEvents
+    .filter((event) => event.sourceType === "arxiv")
+    .slice(0, options?.arxivLimit);
 
   return {
     datasetVersionId: activeDataset.id,
     savedPersonStableIds: [...savedPeople],
     githubEvents,
-    arxivEvents: mappedEvents.filter((event) => event.sourceType === "arxiv"),
+    arxivEvents,
   };
+}
+
+export async function getHomepageData() {
+  return getBoardData({
+    githubLimit: HOMEPAGE_VISIBLE_LIMIT,
+    arxivLimit: HOMEPAGE_VISIBLE_LIMIT,
+  });
+}
+
+export async function getArxivPageData() {
+  return getBoardData({
+    githubLimit: 0,
+  });
 }
 
 export async function getPipelineData() {

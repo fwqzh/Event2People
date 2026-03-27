@@ -163,6 +163,12 @@ export type EventSummaryView = EventInput & {
   peopleCount: number;
   isSaved: boolean;
   cardSummary: string;
+  paperSummaryMetadata?: {
+    publishedAtLabel: string;
+    publishedAtTs: number;
+    keywords: string[];
+    topic: string;
+  } | null;
 };
 
 export type EventDetailView = {

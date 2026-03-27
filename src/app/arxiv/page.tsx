@@ -1,10 +1,10 @@
 import { EventBoard } from "@/components/event-board";
-import { getHomepageData } from "@/lib/data";
+import { getArxivPageData } from "@/lib/data";
 
 export const dynamic = "force-dynamic";
 
 export default async function ArxivPage() {
-  const data = await getHomepageData();
+  const data = await getArxivPageData();
 
   return (
     <div className="page-content">
@@ -14,6 +14,7 @@ export default async function ArxivPage() {
         githubEvents={data.githubEvents}
         arxivEvents={data.arxivEvents}
         visibleSources={["arxiv"]}
+        enableArxivFilters
       />
     </div>
   );

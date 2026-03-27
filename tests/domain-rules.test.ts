@@ -182,7 +182,7 @@ describe("arxiv embodied ranking rules", () => {
 
     expect(query).toContain('all:"embodied intelligence"');
     expect(query).toContain('all:"mobile manipulation"');
-    expect(query).toContain("submittedDate:[202602190000 TO 202603212359]");
+    expect(query).toContain("submittedDate:[202512210000 TO 202603212359]");
   });
 
   it("parses atom xml comment and primary category fields", () => {

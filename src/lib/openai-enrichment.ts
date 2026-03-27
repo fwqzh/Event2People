@@ -528,6 +528,7 @@ export async function enrichBundleWithOpenAI(
   bundle: DatasetBundleInput,
   options?: {
     enrichPeople?: boolean;
+    eventLimit?: number;
     onProgress?: (progress: AiEnrichmentProgress) => void | Promise<void>;
   },
 ): Promise<AiEnrichmentResult> {
@@ -549,7 +550,8 @@ export async function enrichBundleWithOpenAI(
   let people = bundle.people;
   let eventCount = 0;
   let personCount = 0;
-  const eventBatches = chunk(events, EVENT_BATCH_SIZE);
+  const eventsToEnrich = typeof options?.eventLimit === "number" ? events.slice(0, Math.max(0, options.eventLimit)) : events;
+  const eventBatches = chunk(eventsToEnrich, EVENT_BATCH_SIZE);
   const personBatches = options?.enrichPeople === false ? [] : chunk(people, PERSON_BATCH_SIZE);
 
   try {
@@ -572,7 +574,7 @@ export async function enrichBundleWithOpenAI(
         completedBatches,
         totalBatches: eventBatches.length,
         completedItems,
-        totalItems: bundle.events.length,
+        totalItems: eventsToEnrich.length,
       });
     }
   } catch (error) {

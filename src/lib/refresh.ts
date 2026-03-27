@@ -22,7 +22,10 @@ import { fetchGitHubTrendingRepos } from "@/lib/sources/github";
 import { clampZh, formatDay, repoDisplayName, sentenceZh, slugify, uniqueStrings } from "@/lib/text";
 import type { DatasetBundleInput, EventInput, PaperInput, PersonInput, ProjectInput, RepoPaperLinkInput } from "@/lib/types";
 
-const REFRESH_FETCH_LIMIT = 10;
+const GITHUB_REFRESH_FETCH_LIMIT = 10;
+const HOMEPAGE_ARXIV_LIMIT = 10;
+const ARXIV_ACTIVE_POOL_LIMIT = 50;
+const AI_EVENT_ENRICH_LIMIT = GITHUB_REFRESH_FETCH_LIMIT + HOMEPAGE_ARXIV_LIMIT;
 const STALE_REFRESH_MINUTES = 15;
 const countFormatter = new Intl.NumberFormat("en-US");
 
@@ -251,7 +254,7 @@ async function loadGitHubFallbackProjectInputs(prisma: ArxivRefreshFallbackPrism
 
 export async function loadGitHubProjectsForRefresh(
   prisma: ArxivRefreshFallbackPrisma,
-  limit = REFRESH_FETCH_LIMIT,
+  limit = GITHUB_REFRESH_FETCH_LIMIT,
 ): Promise<{ projects: ProjectInput[]; warning: string | null }> {
   try {
     return {
@@ -367,7 +370,7 @@ async function loadArxivFallbackPaperInputs(prisma: ArxivRefreshFallbackPrisma, 
 
 export async function loadArxivPapersForRefresh(
   prisma: ArxivRefreshFallbackPrisma,
-  limit = REFRESH_FETCH_LIMIT,
+  limit = ARXIV_ACTIVE_POOL_LIMIT,
 ): Promise<{ papers: PaperInput[]; warning: string | null }> {
   try {
     return {
@@ -667,8 +670,8 @@ async function executeRefreshRun(prisma: PrismaClient, refreshRunId: string, dat
     await updateRefreshProgress(prisma, refreshRunId, buildRefreshStageMessage("ingest"));
 
     const [githubResult, arxivResult] = await Promise.all([
-      loadGitHubProjectsForRefresh(prisma, REFRESH_FETCH_LIMIT),
-      loadArxivPapersForRefresh(prisma, REFRESH_FETCH_LIMIT),
+      loadGitHubProjectsForRefresh(prisma, GITHUB_REFRESH_FETCH_LIMIT),
+      loadArxivPapersForRefresh(prisma, ARXIV_ACTIVE_POOL_LIMIT),
     ]);
     const sourceWarnings = [githubResult.warning, arxivResult.warning].filter((warning): warning is string => Boolean(warning));
 
@@ -727,6 +730,7 @@ async function executeRefreshRun(prisma: PrismaClient, refreshRunId: string, dat
 
     const aiResult = await enrichBundleWithOpenAI(bundle, {
       enrichPeople: false,
+      eventLimit: AI_EVENT_ENRICH_LIMIT,
       onProgress: async ({ phase, completedItems, totalItems }) => {
         const progress = phase === "events"
           ? buildRefreshRangeProgress(getRefreshStageCopy("ai").progress, 89, completedItems, totalItems)

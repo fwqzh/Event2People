@@ -10,6 +10,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventBoard } from "@/components/event-board";
 import type { EventAnalysisView, EventDetailView, EventSummaryView } from "@/lib/types";
 
+const routerReplaceMock = vi.fn();
+let mockPathname = "/github";
+let mockSearchParams = new URLSearchParams();
+
 vi.mock("next/link", () => ({
   default: ({
     href,
@@ -19,6 +23,14 @@ vi.mock("next/link", () => ({
     href: string;
     children: React.ReactNode;
   }) => React.createElement("a", { href, ...props }, children),
+}));
+
+vi.mock("next/navigation", () => ({
+  usePathname: () => mockPathname,
+  useRouter: () => ({
+    replace: routerReplaceMock,
+  }),
+  useSearchParams: () => mockSearchParams,
 }));
 
 function createSummaryEvent(overrides: Partial<EventSummaryView> = {}): EventSummaryView {
@@ -98,10 +110,52 @@ function createAnalysisResponse(analysis: Partial<EventAnalysisView> = {}) {
   };
 }
 
+function createArxivSummaryEvent(overrides: Partial<EventSummaryView> = {}): EventSummaryView {
+  const stableId = overrides.stableId ?? "event:arxiv:agent-bot-stack";
+  const publishedAt = overrides.paperSummaryMetadata?.publishedAtTs
+    ? new Date(overrides.paperSummaryMetadata.publishedAtTs)
+    : new Date("2026-03-24T09:00:00.000Z");
+
+  return createSummaryEvent({
+    stableId,
+    sourceType: "arxiv",
+    eventType: "new_paper",
+    eventTag: "AI Agent",
+    eventTagConfidence: 0.9,
+    eventTitleZh: `新 paper “${overrides.cardTitle ?? "Agent Bot Stack"}” 发布`,
+    eventHighlightZh: "研究入口出现新论文。",
+    eventDetailSummaryZh: "论文与实现、人物关系可直接追溯到原始页面。",
+    timePrimary: publishedAt,
+    metrics: [
+      { label: "时间", value: "近期" },
+      { label: "authors", value: "2" },
+      { label: "code", value: "无" },
+    ],
+    sourceLinks: [{ label: "Paper", url: `https://arxiv.org/abs/${stableId.replace(/[^0-9]/g, "").slice(0, 10) || "2603.01022"}` }],
+    projectStableIds: [],
+    paperStableIds: [`paper:${stableId.split(":").pop()}`],
+    personStableIds: [],
+    previewPeople: [],
+    peopleCount: 0,
+    cardTitle: overrides.cardTitle ?? "Agent Bot Stack",
+    cardSummary: overrides.cardSummary ?? "这篇论文围绕 agent 与 bot 执行链路展开。",
+    paperSummaryMetadata: {
+      publishedAtLabel: "2026-03-24",
+      publishedAtTs: publishedAt.getTime(),
+      topic: "Agent 执行链路",
+      keywords: ["Agent 执行链路", "bot"],
+    },
+    ...overrides,
+  });
+}
+
 describe("EventBoard", () => {
   beforeEach(() => {
     window.sessionStorage.clear();
     window.HTMLElement.prototype.scrollIntoView = vi.fn();
+    mockPathname = "/github";
+    mockSearchParams = new URLSearchParams();
+    routerReplaceMock.mockReset();
   });
 
   afterEach(() => {
@@ -672,5 +726,221 @@ describe("EventBoard", () => {
     expect(screen.getByText("数据源")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Embodied Planning Kernel 论文解读" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Planning Kernel: 把长链规划拆成基础模块" })).toBeInTheDocument();
+  });
+
+  it("shows arxiv filters and keeps the default list at the first 20 matching papers", async () => {
+    const user = userEvent.setup();
+    mockPathname = "/arxiv";
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+
+        if (url.includes("/api/pipeline")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ ok: true, savedPersonStableIds: [] }),
+          });
+        }
+
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    const arxivEvents = Array.from({ length: 22 }, (_, index) =>
+      createArxivSummaryEvent({
+        stableId: `event:arxiv:paper-${index + 1}`,
+        cardTitle: `Filtered Paper ${index + 1}`,
+        sourceLinks: [{ label: "Paper", url: `https://arxiv.org/abs/2603.${String(index + 1000).padStart(5, "0")}` }],
+      }),
+    );
+
+    render(
+      React.createElement(EventBoard, {
+        datasetVersionId: "dataset-arxiv",
+        savedPersonStableIds: [],
+        githubEvents: [],
+        arxivEvents,
+        visibleSources: ["arxiv"],
+        enableArxivFilters: true,
+      }),
+    );
+
+    expect(screen.getByRole("group", { name: "论文时间筛选" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "论文类目筛选" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "全部" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Agent" })).not.toBeChecked();
+    expect(screen.getByText("22 / 22 篇匹配")).toBeInTheDocument();
+    expect(screen.getByText("Filtered Paper 1")).toBeInTheDocument();
+    expect(screen.getByText("Filtered Paper 20")).toBeInTheDocument();
+    expect(screen.queryByText("Filtered Paper 21")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "查看更多结果" }));
+
+    expect(screen.getByText("Filtered Paper 21")).toBeInTheDocument();
+    expect(screen.getByText("Filtered Paper 22")).toBeInTheDocument();
+  });
+
+  it("filters arxiv papers by time and category, then syncs the URL and shows underflow guidance", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(new Date("2026-03-26T12:00:00.000Z").getTime());
+    const user = userEvent.setup();
+    mockPathname = "/arxiv";
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+
+        if (url.includes("/api/pipeline")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ ok: true, savedPersonStableIds: [] }),
+          });
+        }
+
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    render(
+      React.createElement(EventBoard, {
+        datasetVersionId: "dataset-arxiv",
+        savedPersonStableIds: [],
+        githubEvents: [],
+        arxivEvents: [
+          createArxivSummaryEvent({
+            stableId: "event:arxiv:agent-bot-stack",
+            cardTitle: "Agent Bot Stack",
+            cardSummary: "这篇论文把 agent 与 bot 执行链路串起来。",
+            paperSummaryMetadata: {
+              publishedAtLabel: "2026-03-24",
+              publishedAtTs: new Date("2026-03-24T10:00:00.000Z").getTime(),
+              topic: "Agent 执行链路",
+              keywords: ["Agent 执行链路", "bot"],
+            },
+          }),
+          createArxivSummaryEvent({
+            stableId: "event:arxiv:wm-lab",
+            cardTitle: "World Model Lab",
+            eventTag: "World Model",
+            cardSummary: "这篇论文主要关注 world model 与仿真。",
+            paperSummaryMetadata: {
+              publishedAtLabel: "2026-03-20",
+              publishedAtTs: new Date("2026-03-20T10:00:00.000Z").getTime(),
+              topic: "环境建模与仿真",
+              keywords: ["环境建模与仿真", "wm"],
+            },
+          }),
+          createArxivSummaryEvent({
+            stableId: "event:arxiv:old-agent-paper",
+            cardTitle: "Old Agent Paper",
+            cardSummary: "较早的一篇 agent 论文。",
+            paperSummaryMetadata: {
+              publishedAtLabel: "2025-12-15",
+              publishedAtTs: new Date("2025-12-15T10:00:00.000Z").getTime(),
+              topic: "Agent 执行链路",
+              keywords: ["Agent 执行链路", "legacy"],
+            },
+          }),
+        ],
+        visibleSources: ["arxiv"],
+        enableArxivFilters: true,
+      }),
+    );
+
+    await user.click(screen.getByRole("checkbox", { name: "30天" }));
+    await user.click(screen.getByRole("checkbox", { name: "Agent" }));
+
+    expect(screen.getByText("1 / 3 篇匹配")).toBeInTheDocument();
+    expect(screen.getByText("Agent Bot Stack")).toBeInTheDocument();
+    expect(screen.queryByText("World Model Lab")).not.toBeInTheDocument();
+    expect(screen.queryByText("Old Agent Paper")).not.toBeInTheDocument();
+    expect(screen.getByText("当前仅找到 1 篇符合条件的论文。可尝试放宽时间窗，或清空类目筛选。")).toBeInTheDocument();
+    expect(routerReplaceMock).toHaveBeenLastCalledWith(
+      expect.stringContaining("/arxiv?"),
+      { scroll: false },
+    );
+    expect(String(routerReplaceMock.mock.lastCall?.[0])).toContain("time=30d");
+    expect(String(routerReplaceMock.mock.lastCall?.[0])).toContain("categories=agent");
+
+    await user.click(screen.getByRole("button", { name: "清空筛选" }));
+
+    expect(screen.getByText("3 / 3 篇匹配")).toBeInTheDocument();
+    expect(screen.getByText("World Model Lab")).toBeInTheDocument();
+    expect(screen.getByText("Old Agent Paper")).toBeInTheDocument();
+  });
+
+  it("hydrates arxiv filters from the URL and keeps them disabled elsewhere", async () => {
+    mockPathname = "/arxiv";
+    mockSearchParams = new URLSearchParams("time=7d&categories=agent&q=bot");
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+
+        if (url.includes("/api/pipeline")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ ok: true, savedPersonStableIds: [] }),
+          });
+        }
+
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    const { rerender } = render(
+      React.createElement(EventBoard, {
+        datasetVersionId: "dataset-arxiv",
+        savedPersonStableIds: [],
+        githubEvents: [],
+        arxivEvents: [
+          createArxivSummaryEvent(),
+          createArxivSummaryEvent({
+            stableId: "event:arxiv:robotics",
+            cardTitle: "Robot Control",
+            eventTag: "Robotics",
+            cardSummary: "这篇论文聚焦机器人控制与操作。",
+            paperSummaryMetadata: {
+              publishedAtLabel: "2026-03-24",
+              publishedAtTs: new Date("2026-03-24T10:00:00.000Z").getTime(),
+              topic: "机器人执行",
+              keywords: ["机器人执行", "control"],
+            },
+          }),
+        ],
+        visibleSources: ["arxiv"],
+        enableArxivFilters: true,
+      }),
+    );
+
+    expect(screen.getByRole("checkbox", { name: "7天" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Agent" })).toBeChecked();
+    expect(screen.getByText("1 / 2 篇匹配")).toBeInTheDocument();
+    expect(screen.getByText("Agent Bot Stack")).toBeInTheDocument();
+    expect(screen.queryByText("Robot Control")).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(String(routerReplaceMock.mock.lastCall?.[0])).toContain("time=7d");
+      expect(String(routerReplaceMock.mock.lastCall?.[0])).toContain("categories=agent");
+      expect(String(routerReplaceMock.mock.lastCall?.[0])).not.toContain("q=");
+    });
+
+    mockPathname = "/github";
+    mockSearchParams = new URLSearchParams("time=7d&q=bot");
+
+    rerender(
+      React.createElement(EventBoard, {
+        datasetVersionId: "dataset-github",
+        savedPersonStableIds: [],
+        githubEvents: [createSummaryEvent()],
+        arxivEvents: [createArxivSummaryEvent()],
+        visibleSources: ["github"],
+      }),
+    );
+
+    expect(screen.queryByRole("group", { name: "论文时间筛选" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "论文类目筛选" })).not.toBeInTheDocument();
   });
 });
