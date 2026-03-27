@@ -2163,6 +2163,69 @@ body::after {
   transition-delay: 320ms;
 }
 
+.event-card.is-expanded .event-detail-grid > .detail-panel:nth-child(5) {
+  transition-delay: 390ms;
+}
+
+.paper-explanation-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.paper-explanation-item {
+  padding: 14px 16px;
+  border: 1px solid rgba(12, 34, 56, 0.08);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.paper-explanation-item strong {
+  display: block;
+  font-family: var(--font-mono), "SFMono-Regular", monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--teal);
+}
+
+.paper-explanation-item p {
+  margin-top: 8px;
+}
+
+.paper-metadata-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.paper-metadata-item {
+  padding: 14px 16px;
+  border: 1px solid rgba(12, 34, 56, 0.08);
+  border-radius: 16px;
+  background: rgba(251, 247, 239, 0.82);
+}
+
+.paper-metadata-item strong {
+  display: block;
+  font-family: var(--font-mono), "SFMono-Regular", monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--teal);
+}
+
+.paper-metadata-item p {
+  margin-top: 8px;
+}
+
+@media (max-width: 720px) {
+  .paper-metadata-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .metric-row,
 .link-list {
   margin-top: 0;
@@ -2273,6 +2336,12 @@ body::after {
   animation: detail-spin 720ms linear infinite;
 }
 
+.detail-loading-panel__spinner--inline {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+}
+
 .detail-panel {
   padding: 20px;
 }
@@ -2290,8 +2359,51 @@ body::after {
   color: var(--muted) !important;
 }
 
+.detail-panel__loading-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.detail-panel__loading-row .detail-panel__subcopy {
+  margin-top: 0;
+}
+
 .detail-panel__inline-links {
   margin-top: 16px;
+}
+
+.detail-panel--analysis {
+  background:
+    linear-gradient(180deg, rgba(251, 247, 239, 0.98) 0%, rgba(245, 235, 206, 0.9) 100%);
+}
+
+.detail-analysis-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.detail-analysis-copy p {
+  margin-top: 0;
+  line-height: 1.82;
+  color: rgba(9, 18, 31, 0.9);
+}
+
+.detail-analysis-references {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(16, 32, 51, 0.08);
+}
+
+.detail-analysis-references h6 {
+  margin: 0;
+  color: var(--muted);
+  font-family: var(--font-mono), "SFMono-Regular", monospace;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 .metric-column {

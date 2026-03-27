@@ -277,6 +277,8 @@ function buildEventFacts(events: EventInput[], bundle: DatasetBundleInput) {
         contributorsCount: project!.contributorsCount,
         repoDescriptionRaw: trimForModel(project!.repoDescriptionRaw),
         readmeExcerptRaw: trimForModel(project!.readmeExcerptRaw),
+        marketContextSnippetsRaw: (project!.marketContextSnippetsRaw ?? []).map((snippet) => trimForModel(snippet, 180)),
+        marketContextLinks: (project!.marketContextLinks ?? []).slice(0, 3),
       })),
     papers: event.paperStableIds
       .map((stableId) => paperMap.get(stableId))
@@ -376,6 +378,8 @@ async function enrichEventBatch(client: OpenAI, events: EventInput[], bundle: Da
               "不要发明事实，不要做趋势判断，不要加入空泛评价，不要改写专有名词原文。",
               `如果 sourceType 是 github，eventTitleZh 必须直接写主项目名，优先使用 repoDisplayName，不要写“stars 增长”或“获得实现”这类事件句，最长 ${EVENT_TITLE_LIMIT} 个中文字符。`,
               `如果 sourceType 是 github，eventHighlightZh 必须用一句中文概括这个项目做什么，而不是为什么值得看，最长 ${EVENT_HIGHLIGHT_LIMIT} 个中文字符。`,
+              "如果给了 marketContextSnippetsRaw，优先综合这些中文互联网说明与 repo 原始描述，写成让首次看到该项目的投资人或产品负责人也能立刻知道它是什么的表述。",
+              "GitHub 的 eventDetailSummaryZh 需要进一步解释项目类别、核心工作流或它在链路里扮演的角色，不要写 stars、热度、值得关注、形成信号之类判断。",
               `如果 sourceType 是 arxiv，eventTitleZh 保持事件句写法，最长 ${EVENT_TITLE_LIMIT} 个中文字符。`,
               `如果 sourceType 是 arxiv，eventHighlightZh 必须只有一句，概括研究入口或实现关系，最长 ${EVENT_HIGHLIGHT_LIMIT} 个中文字符。`,
               `eventDetailSummaryZh 最长 ${EVENT_DETAIL_LIMIT} 个中文字符。`,
@@ -414,6 +418,8 @@ async function enrichEventBatch(client: OpenAI, events: EventInput[], bundle: Da
         "不要发明事实，不要加入趋势判断，不要输出空泛评价，不要改变专有名词原文。",
         `如果 sourceType 是 github，eventTitleZh 必须直接写主项目名，优先使用 repoDisplayName，不要写“stars 增长”或“获得实现”这类事件句，最长 ${EVENT_TITLE_LIMIT} 个中文字符。`,
         `如果 sourceType 是 github，eventHighlightZh 必须用一句中文概括这个项目做什么，而不是为什么值得看，最长 ${EVENT_HIGHLIGHT_LIMIT} 个中文字符。`,
+        "如果给了 marketContextSnippetsRaw，优先综合这些中文互联网说明与 repo 原始描述，写成让首次看到该项目的投资人或产品负责人也能立刻知道它是什么的表述。",
+        "GitHub 的 eventDetailSummaryZh 需要进一步解释项目类别、核心工作流或它在链路里扮演的角色，不要写 stars、热度、值得关注、形成信号之类判断。",
         `如果 sourceType 是 arxiv，eventTitleZh 保持事件句写法，最长 ${EVENT_TITLE_LIMIT} 个中文字符。`,
         `如果 sourceType 是 arxiv，eventHighlightZh 必须只有一句，概括研究入口或实现关系，最长 ${EVENT_HIGHLIGHT_LIMIT} 个中文字符。`,
         `eventDetailSummaryZh 最长 ${EVENT_DETAIL_LIMIT} 个中文字符。`,

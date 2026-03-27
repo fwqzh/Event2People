@@ -7,10 +7,14 @@ import {
   buildGitHubProjectIntroZh,
   looksLikeMalformedGitHubIntro,
 } from "@/lib/github-copy";
+import { generateGitHubProjectAnalysis } from "@/lib/github-project-analysis";
+import { readStringArray } from "@/lib/json";
+import { buildPaperExplanationZh, buildPaperTopicView } from "@/lib/paper-copy";
+import { buildPersonLinks } from "@/lib/person-links";
 import { prisma } from "@/lib/prisma";
 import { ensureActiveDataset, parseLinks, parseMetrics } from "@/lib/seed";
-import { clampPlainText, timeAgo } from "@/lib/text";
-import type { EventDetailView, EventSummaryView, LinkItem, PersonPreviewView, PersonView, PipelineEntryView } from "@/lib/types";
+import { clampPlainText, compactInstitution, formatDay, timeAgo } from "@/lib/text";
+import type { EventAnalysisView, EventDetailView, EventSummaryView, PersonPreviewView, PersonView, PipelineEntryView } from "@/lib/types";
 
 type PersonRecord = {
   stableId: string;
@@ -56,6 +60,7 @@ type PaperRecord = {
   publishedAt: Date;
   abstractRaw: string | null;
   codeUrl: string | null;
+  institutionNamesRaw: Prisma.JsonValue | null;
   relatedProjectIds: Prisma.JsonValue;
 };
 
@@ -126,23 +131,6 @@ const CARD_SOURCE_SUMMARY_LIMIT = 220;
 const DETAIL_SOURCE_SUMMARY_LIMIT = 560;
 const countFormatter = new Intl.NumberFormat("en-US");
 
-const PERSON_LINK_BUILDERS = [
-  { label: "Homepage", getUrl: (person: PersonLinkRecord) => person.homepageUrl },
-  { label: "GitHub", getUrl: (person: PersonLinkRecord) => person.githubUrl },
-  { label: "Scholar", getUrl: (person: PersonLinkRecord) => person.scholarUrl },
-  { label: "LinkedIn", getUrl: (person: PersonLinkRecord) => person.linkedinUrl },
-  { label: "X", getUrl: (person: PersonLinkRecord) => person.xUrl },
-  { label: "Email", getUrl: (person: PersonLinkRecord) => (person.email ? `mailto:${person.email}` : null) },
-] as const;
-
-function readStringList(value: Prisma.JsonValue | null | undefined) {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value.filter((item): item is string => typeof item === "string");
-}
-
 function normalizeHomepageMetrics(
   sourceType: "github" | "arxiv",
   metrics: Array<{ label: string; value: string }>,
@@ -153,6 +141,7 @@ function normalizeHomepageMetrics(
   }
 
   const totalStars = projects.reduce((sum, project) => sum + project.stars, 0);
+  const hasTotalStarsMetric = metrics.some((metric) => metric.label === "Total Stars");
 
   return metrics.map((metric) => {
     if (metric.label !== "stars 增量") {
@@ -169,9 +158,13 @@ function normalizeHomepageMetrics(
         return metric;
       }
 
+      if (hasTotalStarsMetric || totalStars <= 0) {
+        return metric;
+      }
+
       return {
         label: "Total Stars",
-        value: totalStars > 0 ? countFormatter.format(totalStars) : metric.value,
+        value: countFormatter.format(totalStars),
       };
     }
 
@@ -217,7 +210,7 @@ function uniqueCopyParts(values: Array<string | null | undefined>) {
 }
 
 function getSourceSummaryLabel(sourceType: "github" | "arxiv") {
-  return sourceType === "github" ? "项目简介" : "论文简介";
+  return sourceType === "github" ? "项目简介" : "论文解读";
 }
 
 function buildSourceSummary(
@@ -235,6 +228,96 @@ function buildSourceSummary(
   return clampCopy(summary || fallback, limit);
 }
 
+function buildArxivNarrative(
+  event: Pick<HomepageEventRecord, "eventTag" | "eventDetailSummaryZh" | "eventHighlightZh" | "relatedRepoCount">,
+  paper: PaperRecord | undefined,
+) {
+  if (!paper) {
+    const fallback = compactCopy(event.eventDetailSummaryZh) || compactCopy(event.eventHighlightZh);
+
+    return {
+      lead: fallback,
+      problem: fallback,
+      method: "当前缺少更完整的摘要，暂时只能从事件文案判断方法方向。",
+      contribution: "当前主要价值在于把这篇论文作为后续继续核验和下钻的研究入口。",
+    };
+  }
+
+  return buildPaperExplanationZh({
+    paperTitle: paper.paperTitle,
+    abstractRaw: paper.abstractRaw,
+    eventTag: event.eventTag as EventSummaryView["eventTag"],
+    hasCode: Boolean(paper.codeUrl || (event.relatedRepoCount ?? 0) > 0),
+    relatedRepoCount: event.relatedRepoCount,
+  });
+}
+
+function getPersonPrimaryInstitution(
+  person:
+    | Pick<PersonRecord, "organizationNamesRaw" | "schoolNamesRaw" | "labNamesRaw">
+    | Pick<PersonView, "organizationNamesRaw" | "schoolNamesRaw" | "labNamesRaw">,
+) {
+  return compactInstitution(
+    readStringArray(person.organizationNamesRaw)[0] ??
+      readStringArray(person.schoolNamesRaw)[0] ??
+      readStringArray(person.labNamesRaw)[0] ??
+      "",
+  );
+}
+
+function buildArxivMetadata(
+  event: Pick<ActiveEventRecord, "eventTag">,
+  paper: PaperRecord | undefined,
+  people: ActiveEventRecord["personLinks"],
+) {
+  if (!paper) {
+    return {
+      publishedAtLabel: "",
+      institutions: [],
+      keywords: [],
+      topic: event.eventTag as EventSummaryView["eventTag"],
+    };
+  }
+
+  const topicView = buildPaperTopicView({
+    paperTitle: paper.paperTitle,
+    abstractRaw: paper.abstractRaw,
+    eventTag: event.eventTag as EventSummaryView["eventTag"],
+  });
+  const institutionsFromPaper = readStringArray(paper.institutionNamesRaw).map((value) => compactInstitution(value));
+  const institutionsFromPeople = people.map((link) => getPersonPrimaryInstitution(link.person)).filter(Boolean);
+  const institutions = institutionsFromPaper.length > 0 ? institutionsFromPaper : institutionsFromPeople;
+
+  return {
+    publishedAtLabel: formatDay(paper.publishedAt),
+    institutions: [...new Set(institutions)].slice(0, 3),
+    keywords: topicView.keywords,
+    topic: topicView.topic,
+  };
+}
+
+function getGitHubNarrativeSummary(
+  event: Pick<HomepageEventRecord, "eventDetailSummaryZh"> | Pick<ActiveEventRecord, "eventDetailSummaryZh">,
+  project: ProjectRecord | undefined,
+  safeHighlight: string,
+) {
+  const generatedSummary = compactCopy(event.eventDetailSummaryZh);
+
+  if (
+    generatedSummary &&
+    !/近期进入高活跃区间|形成清晰人物与来源链接|明确实现连接/.test(generatedSummary)
+  ) {
+    return generatedSummary;
+  }
+
+  return buildGitHubCardSummaryZh({
+    repoName: project?.repoName ?? "",
+    repoDescriptionRaw: project?.repoDescriptionRaw,
+    readmeExcerptRaw: project?.readmeExcerptRaw,
+    highlight: safeHighlight,
+  });
+}
+
 function normalizeGitHubHighlight(
   highlight: string,
   project: ProjectRecord | undefined,
@@ -247,49 +330,54 @@ function normalizeGitHubHighlight(
   return compactCopy(highlight);
 }
 
-function linksForPerson(person: PersonLinkRecord) {
-  const directLinks: LinkItem[] = PERSON_LINK_BUILDERS.flatMap(({ label, getUrl }) => {
-    const url = getUrl(person);
-    return url ? [{ label, url }] : [];
-  });
-
-  if (directLinks.length > 0) {
-    return directLinks;
-  }
-
-  return readStringList(person.sourceUrlsJson).map((url) => ({
-    label: url.includes("github.com") ? "GitHub" : "外链",
-    url,
-  }));
-}
-
 function mapPerson(person: PersonRecord): PersonView {
+  const sourceUrls = readStringArray(person.sourceUrlsJson);
+
   return {
     stableId: person.stableId,
     name: person.name,
     identitySummaryZh: person.identitySummaryZh,
     evidenceSummaryZh: person.evidenceSummaryZh,
-    sourceUrls: readStringList(person.sourceUrlsJson),
+    sourceUrls,
     githubUrl: person.githubUrl,
     scholarUrl: person.scholarUrl,
     linkedinUrl: person.linkedinUrl,
     xUrl: person.xUrl,
     homepageUrl: person.homepageUrl,
     email: person.email,
-    organizationNamesRaw: readStringList(person.organizationNamesRaw),
-    schoolNamesRaw: readStringList(person.schoolNamesRaw),
-    labNamesRaw: readStringList(person.labNamesRaw),
-    bioSnippetsRaw: readStringList(person.bioSnippetsRaw),
-    founderHistoryRaw: readStringList(person.founderHistoryRaw),
-    links: linksForPerson(person),
+    organizationNamesRaw: readStringArray(person.organizationNamesRaw),
+    schoolNamesRaw: readStringArray(person.schoolNamesRaw),
+    labNamesRaw: readStringArray(person.labNamesRaw),
+    bioSnippetsRaw: readStringArray(person.bioSnippetsRaw),
+    founderHistoryRaw: readStringArray(person.founderHistoryRaw),
+    links: buildPersonLinks({
+      githubUrl: person.githubUrl,
+      scholarUrl: person.scholarUrl,
+      linkedinUrl: person.linkedinUrl,
+      xUrl: person.xUrl,
+      homepageUrl: person.homepageUrl,
+      email: person.email,
+      sourceUrls,
+    }),
   };
 }
 
 function mapPersonPreview(person: PersonLinkRecord & Pick<PersonRecord, "stableId" | "name">): PersonPreviewView {
+  const sourceUrls = readStringArray(person.sourceUrlsJson);
+
   return {
     stableId: person.stableId,
     name: person.name,
-    primaryLinkUrl: linksForPerson(person)[0]?.url ?? null,
+    primaryLinkUrl:
+      buildPersonLinks({
+        githubUrl: person.githubUrl,
+        scholarUrl: person.scholarUrl,
+        linkedinUrl: person.linkedinUrl,
+        xUrl: person.xUrl,
+        homepageUrl: person.homepageUrl,
+        email: person.email,
+        sourceUrls,
+      })[0]?.url ?? null,
   };
 }
 
@@ -306,19 +394,15 @@ function mapEventSummary(
 ): EventSummaryView {
   const projects = event.projectLinks.map((link) => link.project);
   const papers = event.paperLinks.map((link) => link.paper);
+  const arxivNarrative = event.sourceType === "arxiv" ? buildArxivNarrative(event, papers[0]) : null;
   const safeHighlight =
     event.sourceType === "github"
       ? normalizeGitHubHighlight(event.eventHighlightZh, projects[0], event.eventTag as EventSummaryView["eventTag"])
       : event.eventHighlightZh;
   const cardSummary =
     event.sourceType === "github"
-      ? buildGitHubCardSummaryZh({
-          repoName: projects[0]?.repoName ?? event.eventTitleZh,
-          repoDescriptionRaw: projects[0]?.repoDescriptionRaw,
-          readmeExcerptRaw: projects[0]?.readmeExcerptRaw,
-          highlight: safeHighlight,
-        })
-      : buildSourceSummary(event.sourceType, projects[0], papers[0], safeHighlight, CARD_SOURCE_SUMMARY_LIMIT);
+      ? getGitHubNarrativeSummary(event, projects[0], safeHighlight)
+      : clampCopy(arxivNarrative?.lead ?? buildSourceSummary(event.sourceType, projects[0], papers[0], safeHighlight, CARD_SOURCE_SUMMARY_LIMIT), CARD_SOURCE_SUMMARY_LIMIT);
 
   return {
     stableId: event.stableId,
@@ -353,26 +437,26 @@ function mapEventDetail(
 ): EventDetailView {
   const projects = event.projectLinks.map((link) => link.project);
   const papers = event.paperLinks.map((link) => link.paper);
+  const arxivNarrative = event.sourceType === "arxiv" ? buildArxivNarrative(event, papers[0]) : null;
+  const arxivMetadata = event.sourceType === "arxiv" ? buildArxivMetadata(event, papers[0], event.personLinks) : null;
   const safeHighlight =
     event.sourceType === "github"
       ? normalizeGitHubHighlight(event.eventHighlightZh, projects[0], event.eventTag as EventSummaryView["eventTag"])
       : event.eventHighlightZh;
-  const detailSummary = buildSourceSummary(
-    event.sourceType,
-    projects[0],
-    papers[0],
-    safeHighlight,
-    DETAIL_SOURCE_SUMMARY_LIMIT,
-  );
+  const detailSummary =
+    event.sourceType === "arxiv"
+      ? clampCopy(arxivNarrative?.lead ?? safeHighlight, DETAIL_SOURCE_SUMMARY_LIMIT)
+      : buildSourceSummary(
+          event.sourceType,
+          projects[0],
+          papers[0],
+          safeHighlight,
+          DETAIL_SOURCE_SUMMARY_LIMIT,
+        );
   const cardSummary =
     event.sourceType === "github"
-      ? buildGitHubCardSummaryZh({
-          repoName: projects[0]?.repoName ?? event.eventTitleZh,
-          repoDescriptionRaw: projects[0]?.repoDescriptionRaw,
-          readmeExcerptRaw: projects[0]?.readmeExcerptRaw,
-          highlight: safeHighlight,
-        })
-      : buildSourceSummary(event.sourceType, projects[0], papers[0], safeHighlight, CARD_SOURCE_SUMMARY_LIMIT);
+      ? getGitHubNarrativeSummary(event, projects[0], safeHighlight)
+      : clampCopy(arxivNarrative?.lead ?? buildSourceSummary(event.sourceType, projects[0], papers[0], safeHighlight, CARD_SOURCE_SUMMARY_LIMIT), CARD_SOURCE_SUMMARY_LIMIT);
 
   return {
     stableId: event.stableId,
@@ -381,7 +465,8 @@ function mapEventDetail(
     detailSummary,
     introSummary:
       event.sourceType === "github"
-        ? buildGitHubExpandedIntroZh({
+        ? getGitHubNarrativeSummary(event, projects[0], safeHighlight) ||
+          buildGitHubExpandedIntroZh({
             repoName: projects[0]?.repoName ?? event.eventTitleZh,
             repoDescriptionRaw: projects[0]?.repoDescriptionRaw,
             readmeExcerptRaw: projects[0]?.readmeExcerptRaw,
@@ -389,6 +474,10 @@ function mapEventDetail(
             cardSummary,
           })
         : detailSummary,
+    analysisSummary: null,
+    analysisReferences: [],
+    paperExplanation: event.sourceType === "arxiv" ? arxivNarrative : null,
+    paperMetadata: event.sourceType === "arxiv" ? arxivMetadata : null,
   };
 }
 
@@ -531,4 +620,45 @@ export async function getActiveEventByStableId(stableId: string) {
 export async function getActiveEventDetailByStableId(stableId: string) {
   const event = await getActiveEventByStableId(stableId);
   return event ? mapEventDetail(event) : null;
+}
+
+export async function getActiveEventAnalysisByStableId(stableId: string): Promise<EventAnalysisView | null> {
+  const event = await getActiveEventByStableId(stableId);
+
+  if (!event || event.sourceType !== "github") {
+    return null;
+  }
+
+  const project = event.projectLinks[0]?.project;
+
+  if (!project) {
+    return null;
+  }
+
+  const detail = mapEventDetail(event);
+  const analysis = await generateGitHubProjectAnalysis({
+    stableId: event.stableId,
+    eventTitleZh: event.eventTitleZh,
+    eventHighlightZh: event.eventHighlightZh,
+    eventTag: event.eventTag,
+    detailSummary: detail.detailSummary,
+    metrics: parseMetrics(event.metricsJson),
+    project: {
+      repoName: project.repoName,
+      ownerName: project.ownerName,
+      repoDescriptionRaw: project.repoDescriptionRaw,
+      readmeExcerptRaw: project.readmeExcerptRaw,
+    },
+    people: event.personLinks.map((link) => ({
+      name: link.person.name,
+      contributionCount: link.contributionCount,
+      identitySummaryZh: link.person.identitySummaryZh,
+    })),
+  });
+
+  return {
+    stableId: event.stableId,
+    analysisSummary: analysis.analysisSummary,
+    analysisReferences: analysis.analysisReferences,
+  };
 }

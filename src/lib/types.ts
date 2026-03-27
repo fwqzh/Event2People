@@ -1,4 +1,5 @@
 import type { EventType, PeopleDetectionStatus, SourceType } from "@prisma/client";
+import type { PaperExplanationView } from "@/lib/paper-copy";
 
 export type EventTag =
   | "AI Agent"
@@ -21,6 +22,12 @@ export type MetricItem = {
 
 export type LinkItem = {
   label: string;
+  url: string;
+};
+
+export type ReferenceItem = {
+  label: string;
+  title: string;
   url: string;
 };
 
@@ -58,6 +65,8 @@ export type ProjectInput = {
   repoUpdatedAt: Date;
   repoDescriptionRaw?: string | null;
   readmeExcerptRaw?: string | null;
+  marketContextSnippetsRaw?: string[];
+  marketContextLinks?: LinkItem[];
   githubContributors?: Array<{
     login: string;
     htmlUrl: string;
@@ -77,6 +86,7 @@ export type PaperInput = {
   abstractRaw?: string | null;
   codeUrl?: string | null;
   semanticScholarUrl?: string | null;
+  institutionNamesRaw?: string[];
   relatedProjectStableIds?: string[];
 };
 
@@ -163,6 +173,21 @@ export type EventDetailView = {
   sourceSummaryLabel: string;
   detailSummary: string;
   introSummary: string;
+  analysisSummary?: string | null;
+  analysisReferences?: ReferenceItem[];
+  paperExplanation?: PaperExplanationView | null;
+  paperMetadata?: {
+    publishedAtLabel: string;
+    institutions: string[];
+    keywords: string[];
+    topic: string;
+  } | null;
+};
+
+export type EventAnalysisView = {
+  stableId: string;
+  analysisSummary: string | null;
+  analysisReferences: ReferenceItem[];
 };
 
 export type PipelineEntryView = PipelineEntrySeedInput & {

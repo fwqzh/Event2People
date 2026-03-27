@@ -83,8 +83,8 @@ export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
           </div>
 
           <div className="toolbar-card__actions">
-            <Link href="/" className="ghost-button ghost-button--inverse">
-              返回 Event Board
+            <Link href="/github" className="ghost-button ghost-button--inverse">
+              返回 GitHub
             </Link>
             <button
               type="button"

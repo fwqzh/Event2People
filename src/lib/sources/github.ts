@@ -49,6 +49,7 @@ type TrendingCache = {
   updatedAt: number;
 };
 
+const GITHUB_REQUEST_TIMEOUT_MS = 12_000;
 const GITHUB_HEADERS: HeadersInit = {
   "User-Agent": "Event2People/1.0",
   Accept: "application/vnd.github+json",
@@ -129,6 +130,7 @@ async function fetchTrendingDailyCandidates() {
       "User-Agent": "Event2People/1.0",
       Accept: "text/html",
     },
+    signal: AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS),
     next: { revalidate: 60 * 15 },
   });
 
@@ -145,6 +147,7 @@ async function fetchReadme(fullName: string) {
       ...GITHUB_HEADERS,
       Accept: "application/vnd.github.raw+json",
     },
+    signal: AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS),
     next: { revalidate: 60 * 60 },
   });
 
@@ -158,6 +161,7 @@ async function fetchReadme(fullName: string) {
 async function enrichCandidate(candidate: GitHubTrendingCandidate) {
   const repoResponse = await fetch(`https://api.github.com/repos/${candidate.fullName}`, {
     headers: GITHUB_HEADERS,
+    signal: AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS),
     next: { revalidate: 60 * 60 },
   });
 
@@ -168,6 +172,7 @@ async function enrichCandidate(candidate: GitHubTrendingCandidate) {
   const repoJson = await repoResponse.json();
   const contributorsResponse = await fetch(`https://api.github.com/repos/${candidate.fullName}/contributors?per_page=12`, {
     headers: GITHUB_HEADERS,
+    signal: AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS),
     next: { revalidate: 60 * 60 },
   });
   const contributors = contributorsResponse.ok ? await contributorsResponse.json() : [];

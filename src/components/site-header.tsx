@@ -16,7 +16,7 @@ export async function SiteHeader() {
     <SiteHeaderShell>
       <div className="page-shell site-header__inner">
         <div className="site-header__brand-cluster">
-          <Link href="/" className="site-header__brand">
+          <Link href="/github" className="site-header__brand">
             <span className="brand-lockup">
               <span
                 className="brand-lockup__wordmark"

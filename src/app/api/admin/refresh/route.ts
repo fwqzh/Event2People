@@ -4,14 +4,23 @@ import { prisma } from "@/lib/prisma";
 import { getRefreshStatus, kickoffRefresh } from "@/lib/refresh";
 
 export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const runId = searchParams.get("runId");
-  const snapshot = await getRefreshStatus(prisma, runId);
+  try {
+    const { searchParams } = new URL(request.url);
+    const runId = searchParams.get("runId");
+    const snapshot = await getRefreshStatus(prisma, runId);
 
-  return NextResponse.json({
-    ok: true,
-    snapshot,
-  });
+    return NextResponse.json({
+      ok: true,
+      snapshot,
+    });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error: error instanceof Error ? error.message : "刷新状态获取失败",
+      },
+      { status: 500 },
+    );
+  }
 }
 
 export async function POST() {

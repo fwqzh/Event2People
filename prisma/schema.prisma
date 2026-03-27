@@ -173,6 +173,7 @@ model Paper {
   publishedAt       DateTime
   abstractRaw       String?
   codeUrl           String?
+  institutionNamesRaw Json?
   relatedProjectIds Json?
   createdAt         DateTime       @default(now())
   datasetVersion    DatasetVersion @relation(fields: [datasetVersionId], references: [id], onDelete: Cascade)

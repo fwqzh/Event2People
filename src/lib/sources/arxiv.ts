@@ -2,6 +2,7 @@ import { subDays } from "date-fns";
 import { XMLParser } from "fast-xml-parser";
 
 import { env } from "@/lib/env";
+import { extractInstitutionNamesFromPdf } from "@/lib/pdf-paper-institutions";
 
 export type ArxivPaperRecord = {
   rank: number;
@@ -19,6 +20,7 @@ export type ArxivPaperRecord = {
   citationCount: number;
   influentialCitationCount: number;
   semanticScholarUrl: string;
+  institutionNamesRaw: string[];
   venueBonus: number;
   recencyBonus: number;
   impactScore: number;
@@ -26,7 +28,14 @@ export type ArxivPaperRecord = {
 
 type RawArxivPaperRecord = Omit<
   ArxivPaperRecord,
-  "rank" | "citationCount" | "influentialCitationCount" | "semanticScholarUrl" | "venueBonus" | "recencyBonus" | "impactScore"
+  | "rank"
+  | "citationCount"
+  | "influentialCitationCount"
+  | "semanticScholarUrl"
+  | "institutionNamesRaw"
+  | "venueBonus"
+  | "recencyBonus"
+  | "impactScore"
 >;
 
 type SemanticScholarPaper = {
@@ -85,6 +94,8 @@ const VENUE_BONUS_RULES: Array<{ pattern: RegExp; bonus: number }> = [
 const ACCEPTANCE_SIGNAL_BONUS = 18;
 const MAX_CANDIDATES = 80;
 const SEMANTIC_SCHOLAR_BATCH_SIZE = 40;
+const ARXIV_RETRY_DELAYS_MS = [1500, 4000];
+const ARXIV_REQUEST_TIMEOUT_MS = 12_000;
 const ARXIV_HEADERS: HeadersInit = {
   "User-Agent": "Event2People/1.0",
   Accept: "application/atom+xml",
@@ -100,6 +111,10 @@ let arxivCache: ArxivCache | null = null;
 
 function compactText(value: unknown) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function pad2(value: number) {
@@ -226,16 +241,39 @@ async function fetchArxivCandidates(now = new Date()) {
     start: "0",
     max_results: String(MAX_CANDIDATES),
   });
-  const response = await fetch(`https://export.arxiv.org/api/query?${params.toString()}`, {
-    headers: ARXIV_HEADERS,
-    next: { revalidate: 60 * 30 },
-  });
+  const url = `https://export.arxiv.org/api/query?${params.toString()}`;
+  let lastError: Error | null = null;
 
-  if (!response.ok) {
-    throw new Error(`arXiv fetch failed: ${response.status}`);
+  for (let attempt = 0; attempt <= ARXIV_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        headers: ARXIV_HEADERS,
+        signal: AbortSignal.timeout(ARXIV_REQUEST_TIMEOUT_MS),
+        next: { revalidate: 60 * 30 },
+      });
+
+      if (response.ok) {
+        return parseArxivAtomXml(await response.text()).filter(matchesEmbodiedPaper);
+      }
+
+      const shouldRetry = response.status === 429 || response.status >= 500;
+      lastError = new Error(`arXiv fetch failed: ${response.status}`);
+
+      if (!shouldRetry || attempt === ARXIV_RETRY_DELAYS_MS.length) {
+        throw lastError;
+      }
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error("arXiv fetch failed");
+
+      if (attempt === ARXIV_RETRY_DELAYS_MS.length) {
+        throw lastError;
+      }
+    }
+
+    await sleep(ARXIV_RETRY_DELAYS_MS[attempt] ?? 0);
   }
 
-  return parseArxivAtomXml(await response.text()).filter(matchesEmbodiedPaper);
+  throw lastError ?? new Error("arXiv fetch failed");
 }
 
 async function fetchSemanticScholarBatch(ids: string[]) {
@@ -243,6 +281,7 @@ async function fetchSemanticScholarBatch(ids: string[]) {
     method: "POST",
     headers: SEMANTIC_SCHOLAR_HEADERS,
     body: JSON.stringify({ ids }),
+    signal: AbortSignal.timeout(ARXIV_REQUEST_TIMEOUT_MS),
     next: { revalidate: 60 * 60 },
   });
 
@@ -300,6 +339,7 @@ async function enrichWithSemanticScholar(records: RawArxivPaperRecord[]) {
       citationCount: paperMetrics.citationCount,
       influentialCitationCount: paperMetrics.influentialCitationCount,
       semanticScholarUrl: paperMetrics.url,
+      institutionNamesRaw: [],
       venueBonus: score.venueBonus,
       recencyBonus: score.recencyBonus,
       impactScore: score.impactScore,
@@ -307,11 +347,36 @@ async function enrichWithSemanticScholar(records: RawArxivPaperRecord[]) {
   });
 }
 
+async function enrichWithPdfInstitutions(records: ArxivPaperRecord[]) {
+  const results = await Promise.allSettled(
+    records.map(async (record) => ({
+      arxivId: record.arxivId,
+      institutionNamesRaw: await extractInstitutionNamesFromPdf(record.pdfUrl, record.authors),
+    })),
+  );
+
+  const institutionsByArxivId = new Map<string, string[]>();
+
+  results.forEach((result) => {
+    if (result.status === "fulfilled") {
+      institutionsByArxivId.set(result.value.arxivId, result.value.institutionNamesRaw);
+      return;
+    }
+
+    console.warn("PDF institution extraction fallback:", result.reason instanceof Error ? result.reason.message : "unknown pdf error");
+  });
+
+  return records.map((record) => ({
+    ...record,
+    institutionNamesRaw: institutionsByArxivId.get(record.arxivId) ?? [],
+  }));
+}
+
 export async function fetchArxivPapers(limit = 10) {
   try {
     const candidates = await fetchArxivCandidates();
     const enriched = await enrichWithSemanticScholar(candidates);
-    const topRecords = enriched
+    const rankedRecords = enriched
       .sort(
         (left, right) =>
           right.impactScore - left.impactScore ||
@@ -323,7 +388,9 @@ export async function fetchArxivPapers(limit = 10) {
       .map((record, index) => ({
         ...record,
         rank: index + 1,
+        institutionNamesRaw: [],
       }));
+    const topRecords = await enrichWithPdfInstitutions(rankedRecords);
 
     if (topRecords.length > 0) {
       arxivCache = {

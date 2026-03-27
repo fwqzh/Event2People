@@ -1,8 +1,9 @@
 import { subDays, subMinutes } from "date-fns";
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 
 import { classifyEventTag } from "@/lib/event-tag";
 import { buildGitHubProjectIntroZh } from "@/lib/github-copy";
+import { readStringArray } from "@/lib/json";
 import { shouldMergePeople } from "@/lib/merge-people";
 import { enrichBundleWithOpenAI } from "@/lib/openai-enrichment";
 import {
@@ -15,6 +16,7 @@ import { decideRepoPaperLink } from "@/lib/repo-paper-linking";
 import { buildSampleDataset } from "@/lib/sample-data";
 import { persistDataset } from "@/lib/seed";
 import { fetchArxivPapers } from "@/lib/sources/arxiv";
+import { enrichGitHubProjectsWithNarrativeContext } from "@/lib/sources/github-project-search";
 import { enrichGitHubOwners, githubStableId } from "@/lib/sources/github-people";
 import { fetchGitHubTrendingRepos } from "@/lib/sources/github";
 import { clampZh, formatDay, repoDisplayName, sentenceZh, slugify, uniqueStrings } from "@/lib/text";
@@ -32,11 +34,30 @@ function link(label: string, url: string) {
   return { label, url };
 }
 
-function buildRefreshMessage(eventCount: number, options: { aiEnabled: boolean; aiEventCount: number; aiPersonCount: number; aiErrors: string[] }) {
+function uniqueLinkItems(items: Array<{ label: string; url: string }>) {
+  const seen = new Set<string>();
+
+  return items.filter((item) => {
+    if (!item.url || seen.has(item.url)) {
+      return false;
+    }
+
+    seen.add(item.url);
+    return true;
+  });
+}
+
+function buildRefreshMessage(
+  eventCount: number,
+  options: { aiEnabled: boolean; aiEventCount: number; aiPersonCount: number; aiErrors: string[]; sourceWarnings: string[] },
+) {
   const parts = [`刷新完成：${eventCount} 个 event`];
 
   if (!options.aiEnabled) {
     parts.push("未配置 OpenAI，已使用模板文案");
+    if (options.sourceWarnings.length > 0) {
+      parts.push(...options.sourceWarnings);
+    }
     return parts.join(" · ");
   }
 
@@ -54,8 +75,42 @@ function buildRefreshMessage(eventCount: number, options: { aiEnabled: boolean; 
     parts.push("部分 AI enrichment 已回退");
   }
 
+  if (options.sourceWarnings.length > 0) {
+    parts.push(...options.sourceWarnings);
+  }
+
   return parts.join(" · ");
 }
+
+type StoredPaperRecord = {
+  stableId: string;
+  paperTitle: string;
+  paperUrl: string;
+  authorsJson: Prisma.JsonValue;
+  authorsCount: number;
+  publishedAt: Date;
+  abstractRaw: string | null;
+  codeUrl: string | null;
+  institutionNamesRaw: Prisma.JsonValue | null;
+  relatedProjectIds: Prisma.JsonValue;
+};
+
+type ArxivRefreshFallbackPrisma = Pick<PrismaClient, "datasetVersion" | "event">;
+type StoredProjectRecord = {
+  stableId: string;
+  repoName: string;
+  repoUrl: string;
+  ownerName: string;
+  ownerUrl: string;
+  stars: number;
+  starDelta7d: number;
+  contributorsCount: number;
+  repoCreatedAt: Date;
+  repoUpdatedAt: Date;
+  repoDescriptionRaw: string | null;
+  readmeExcerptRaw: string | null;
+  relatedPaperIdsJson: Prisma.JsonValue;
+};
 
 function personFromAuthor(name: string): PersonInput {
   return {
@@ -119,6 +174,108 @@ function createProjectInputs(githubRepos: Awaited<ReturnType<typeof fetchGitHubT
   }));
 }
 
+function mapStoredProjectToInput(project: StoredProjectRecord): ProjectInput {
+  return {
+    stableId: project.stableId,
+    repoName: project.repoName,
+    repoUrl: project.repoUrl,
+    ownerName: project.ownerName,
+    ownerUrl: project.ownerUrl,
+    stars: project.stars,
+    starDelta7d: project.starDelta7d,
+    contributorsCount: project.contributorsCount,
+    repoCreatedAt: project.repoCreatedAt,
+    repoUpdatedAt: project.repoUpdatedAt,
+    repoDescriptionRaw: project.repoDescriptionRaw,
+    readmeExcerptRaw: project.readmeExcerptRaw,
+    relatedPaperStableIds: readStringArray(project.relatedPaperIdsJson),
+  };
+}
+
+async function loadGitHubFallbackProjectInputs(prisma: ArxivRefreshFallbackPrisma, limit: number) {
+  const activeDataset = await prisma.datasetVersion.findFirst({
+    where: { status: "ACTIVE" },
+    select: { id: true },
+  });
+
+  if (!activeDataset) {
+    return [];
+  }
+
+  const events = await prisma.event.findMany({
+    where: {
+      datasetVersionId: activeDataset.id,
+      sourceType: "github",
+    },
+    include: {
+      projectLinks: {
+        include: {
+          project: {
+            select: {
+              stableId: true,
+              repoName: true,
+              repoUrl: true,
+              ownerName: true,
+              ownerUrl: true,
+              stars: true,
+              starDelta7d: true,
+              contributorsCount: true,
+              repoCreatedAt: true,
+              repoUpdatedAt: true,
+              repoDescriptionRaw: true,
+              readmeExcerptRaw: true,
+              relatedPaperIdsJson: true,
+            },
+          },
+        },
+      },
+    },
+    orderBy: { displayRank: "asc" },
+    take: limit,
+  });
+
+  const projects = new Map<string, ProjectInput>();
+
+  for (const event of events) {
+    for (const link of event.projectLinks) {
+      if (!projects.has(link.project.stableId)) {
+        projects.set(link.project.stableId, mapStoredProjectToInput(link.project));
+      }
+    }
+  }
+
+  return [...projects.values()].slice(0, limit);
+}
+
+export async function loadGitHubProjectsForRefresh(
+  prisma: ArxivRefreshFallbackPrisma,
+  limit = REFRESH_FETCH_LIMIT,
+): Promise<{ projects: ProjectInput[]; warning: string | null }> {
+  try {
+    return {
+      projects: createProjectInputs(await fetchGitHubTrendingRepos(limit)),
+      warning: null,
+    };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "unknown fetch error";
+    console.warn("GitHub live fetch fallback:", reason);
+
+    const fallbackProjects = await loadGitHubFallbackProjectInputs(prisma, limit);
+
+    if (fallbackProjects.length > 0) {
+      return {
+        projects: fallbackProjects,
+        warning: `GitHub 临时不可用，已回退到当前活跃数据集的 ${fallbackProjects.length} 个项目`,
+      };
+    }
+
+    return {
+      projects: [],
+      warning: "GitHub 临时不可用，且没有可用缓存，本次已跳过 GitHub 更新",
+    };
+  }
+}
+
 function createPaperInputs(arxivPapers: Awaited<ReturnType<typeof fetchArxivPapers>>): PaperInput[] {
   return arxivPapers.map((paper) => ({
     stableId: `paper:${slugify(paper.title)}`,
@@ -129,7 +286,104 @@ function createPaperInputs(arxivPapers: Awaited<ReturnType<typeof fetchArxivPape
     publishedAt: paper.publishedAt,
     abstractRaw: paper.summary,
     semanticScholarUrl: paper.semanticScholarUrl,
+    institutionNamesRaw: paper.institutionNamesRaw,
   }));
+}
+
+function mapStoredPaperToInput(paper: StoredPaperRecord): PaperInput {
+  return {
+    stableId: paper.stableId,
+    paperTitle: paper.paperTitle,
+    paperUrl: paper.paperUrl,
+    authors: readStringArray(paper.authorsJson),
+    authorsCount: paper.authorsCount,
+    publishedAt: paper.publishedAt,
+    abstractRaw: paper.abstractRaw,
+    codeUrl: paper.codeUrl,
+    institutionNamesRaw: readStringArray(paper.institutionNamesRaw),
+    relatedProjectStableIds: readStringArray(paper.relatedProjectIds),
+  };
+}
+
+async function loadArxivFallbackPaperInputs(prisma: ArxivRefreshFallbackPrisma, limit: number) {
+  const activeDataset = await prisma.datasetVersion.findFirst({
+    where: { status: "ACTIVE" },
+    select: { id: true },
+  });
+
+  if (!activeDataset) {
+    return [];
+  }
+
+  const events = await prisma.event.findMany({
+    where: {
+      datasetVersionId: activeDataset.id,
+      sourceType: "arxiv",
+    },
+    include: {
+      paperLinks: {
+        include: {
+          paper: {
+            select: {
+              stableId: true,
+              paperTitle: true,
+              paperUrl: true,
+              authorsJson: true,
+              authorsCount: true,
+              publishedAt: true,
+              abstractRaw: true,
+              codeUrl: true,
+              institutionNamesRaw: true,
+              relatedProjectIds: true,
+            },
+          },
+        },
+      },
+    },
+    orderBy: { displayRank: "asc" },
+    take: limit,
+  });
+
+  const papers = new Map<string, PaperInput>();
+
+  for (const event of events) {
+    for (const link of event.paperLinks) {
+      if (!papers.has(link.paper.stableId)) {
+        papers.set(link.paper.stableId, mapStoredPaperToInput(link.paper));
+      }
+    }
+  }
+
+  return [...papers.values()].slice(0, limit);
+}
+
+export async function loadArxivPapersForRefresh(
+  prisma: ArxivRefreshFallbackPrisma,
+  limit = REFRESH_FETCH_LIMIT,
+): Promise<{ papers: PaperInput[]; warning: string | null }> {
+  try {
+    return {
+      papers: createPaperInputs(await fetchArxivPapers(limit)),
+      warning: null,
+    };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "unknown fetch error";
+    console.warn("arXiv live fetch fallback:", reason);
+
+    const fallbackPapers = await loadArxivFallbackPaperInputs(prisma, limit);
+
+    if (fallbackPapers.length > 0) {
+      return {
+        papers: fallbackPapers,
+        warning: `arXiv 临时不可用，已回退到当前活跃数据集的 ${fallbackPapers.length} 篇论文`,
+      };
+    }
+
+    return {
+      papers: [],
+      warning: "arXiv 临时不可用，且没有可用缓存，本次已跳过 arXiv 更新",
+    };
+  }
 }
 
 function buildRepoPaperLinks(projects: ProjectInput[], papers: PaperInput[]) {
@@ -210,6 +464,7 @@ function buildGitHubEvents(
     const matchingLinks = confirmedLinksByProject.get(project.stableId) ?? [];
     const linkedPaper = matchingLinks.map((link) => paperByStableId.get(link.paperStableId)).find(Boolean);
     const tag = classifyEventTag([project.repoName, project.repoDescriptionRaw ?? "", project.readmeExcerptRaw ?? ""]);
+    const baseHighlight = buildGitHubProjectIntroZh(project, tag.tag);
     const ownerStableId = githubStableId(project.ownerName);
     const contributorEntries = (project.githubContributors ?? []).map((contributor) => ({
       stableId: githubStableId(contributor.login),
@@ -248,17 +503,22 @@ function buildGitHubEvents(
       eventTag: tag.tag,
       eventTagConfidence: tag.confidence,
       eventTitleZh: clampZh(repoDisplayName(project.repoName), 32),
-      eventHighlightZh: buildGitHubProjectIntroZh(project, tag.tag),
-      eventDetailSummaryZh: linkedPaper
-        ? `该项目已与 Paper “${linkedPaper.paperTitle}” 形成明确实现连接。`
-        : "该项目近期进入高活跃区间，并已形成清晰人物与来源链接。",
+      eventHighlightZh: baseHighlight,
+      eventDetailSummaryZh: clampZh(
+        project.marketContextSnippetsRaw?.find(Boolean) ?? project.repoDescriptionRaw ?? project.readmeExcerptRaw ?? baseHighlight,
+        64,
+      ),
       timePrimary: project.repoUpdatedAt,
       metrics: [
         metric("时间", formatDay(project.repoUpdatedAt)),
         metric("today stars", `+${project.todayStars ?? project.starDelta7d}`),
         metric("Total Stars", countFormatter.format(project.stars)),
       ],
-      sourceLinks: [link("GitHub", project.repoUrl), ...(linkedPaper ? [link("Paper", linkedPaper.paperUrl)] : [])],
+      sourceLinks: uniqueLinkItems([
+        link("GitHub", project.repoUrl),
+        ...(linkedPaper ? [link("Paper", linkedPaper.paperUrl)] : []),
+        ...((project.marketContextLinks ?? []).slice(0, 2)),
+      ]),
       peopleDetectionStatus: orderedPersonStableIds.length > 0 ? "resolved" : "missing",
       projectStableIds: [project.stableId],
       paperStableIds: linkedPaper ? [linkedPaper.stableId] : [],
@@ -398,15 +658,30 @@ async function executeRefreshRun(prisma: PrismaClient, refreshRunId: string, dat
   try {
     await updateRefreshProgress(prisma, refreshRunId, buildRefreshStageMessage("ingest"));
 
-    const [githubRepos, arxivPapers] = await Promise.all([
-      fetchGitHubTrendingRepos(REFRESH_FETCH_LIMIT),
-      fetchArxivPapers(REFRESH_FETCH_LIMIT),
+    const [githubResult, arxivResult] = await Promise.all([
+      loadGitHubProjectsForRefresh(prisma, REFRESH_FETCH_LIMIT),
+      loadArxivPapersForRefresh(prisma, REFRESH_FETCH_LIMIT),
     ]);
+    const sourceWarnings = [githubResult.warning, arxivResult.warning].filter((warning): warning is string => Boolean(warning));
 
     await updateRefreshProgress(prisma, refreshRunId, buildRefreshStageMessage("normalize"));
 
-    const githubProjects = createProjectInputs(githubRepos);
-    const papers = createPaperInputs(arxivPapers);
+    const githubProjectsBase = githubResult.projects;
+    const githubProjects =
+      githubProjectsBase.length > 0
+        ? await enrichGitHubProjectsWithNarrativeContext(githubProjectsBase, async ({ completed, total, repoName }) => {
+            const progress = buildRefreshRangeProgress(28, 38, completed, total);
+            await updateRefreshProgress(
+              prisma,
+              refreshRunId,
+              buildRefreshStageMessage("normalize", `补充 GitHub 中文互联网语境 (${completed}/${total}) · ${repoName}`).replace(
+                "progress::28",
+                `progress::${progress}`,
+              ),
+            );
+          })
+        : githubProjectsBase;
+    const papers = arxivResult.papers;
     const ownerCount = countGitHubPeopleCandidates(githubProjects);
 
     await updateRefreshProgress(
@@ -506,6 +781,7 @@ async function executeRefreshRun(prisma: PrismaClient, refreshRunId: string, dat
             aiEventCount: aiResult.eventCount,
             aiPersonCount: aiResult.personCount,
             aiErrors: aiResult.errors,
+            sourceWarnings,
           }),
         },
       });

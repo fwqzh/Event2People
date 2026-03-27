@@ -1,7 +1,8 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 
+import { readLinkItems, readMetricItems } from "@/lib/json";
 import { buildSampleDataset } from "@/lib/sample-data";
-import type { DatasetBundleInput, LinkItem, MetricItem } from "@/lib/types";
+import type { DatasetBundleInput } from "@/lib/types";
 
 type TxClient = Prisma.TransactionClient | PrismaClient;
 
@@ -79,6 +80,7 @@ async function persistDataset(tx: TxClient, datasetVersionId: string, bundle: Da
       publishedAt: paper.publishedAt,
       abstractRaw: paper.abstractRaw ?? null,
       codeUrl: paper.codeUrl ?? null,
+      institutionNamesRaw: paper.institutionNamesRaw ?? Prisma.JsonNull,
       relatedProjectIds: paper.relatedProjectStableIds ?? Prisma.JsonNull,
     })),
   });
@@ -243,11 +245,11 @@ export async function ensureActiveDataset(prisma: PrismaClient) {
 }
 
 export function parseMetrics(value: Prisma.JsonValue) {
-  return (value as MetricItem[]) ?? [];
+  return readMetricItems(value);
 }
 
 export function parseLinks(value: Prisma.JsonValue) {
-  return (value as LinkItem[]) ?? [];
+  return readLinkItems(value);
 }
 
 export { persistDataset, recordId };

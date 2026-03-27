@@ -181,6 +181,7 @@ export function buildSampleDataset(now = new Date()): DatasetBundleInput {
       publishedAt: subDays(now, 1),
       abstractRaw: "Embodied web interaction policy for robotics operators.",
       codeUrl: "https://github.com/alice-chen/vox-agent",
+      institutionNamesRaw: ["Tsinghua University", "Shanghai AI Laboratory"],
       relatedProjectStableIds: ["repo:alice-chen/vox-agent"],
     },
     {
@@ -191,6 +192,7 @@ export function buildSampleDataset(now = new Date()): DatasetBundleInput {
       authorsCount: 2,
       publishedAt: subDays(now, 2),
       abstractRaw: "Planning primitives for embodied agents in cluttered scenes.",
+      institutionNamesRaw: ["Tsinghua University", "Shanghai AI Laboratory"],
     },
     {
       stableId: "paper:agent-observation-stack",
@@ -200,6 +202,7 @@ export function buildSampleDataset(now = new Date()): DatasetBundleInput {
       authorsCount: 2,
       publishedAt: subDays(now, 2),
       abstractRaw: "Observation and reasoning stack for multimodal enterprise agents.",
+      institutionNamesRaw: ["OpenAI", "Stanford University"],
     },
     {
       stableId: "paper:open-voice-planner",
@@ -209,6 +212,7 @@ export function buildSampleDataset(now = new Date()): DatasetBundleInput {
       authorsCount: 1,
       publishedAt: subDays(now, 3),
       abstractRaw: "Voice-first planning for conversational agents.",
+      institutionNamesRaw: ["Audio Lab"],
       relatedProjectStableIds: ["repo:audio-lab/voice-weaver"],
     },
   ];
