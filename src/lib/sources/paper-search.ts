@@ -1,5 +1,5 @@
 import { buildPaperTopicView } from "@/lib/paper-copy";
-import { env } from "@/lib/env";
+import { getTavilyApiKey } from "@/lib/runtime-settings";
 import type { EventTag, PaperInput, ReferenceItem } from "@/lib/types";
 
 const SEARCH_REQUEST_TIMEOUT_MS = 6_000;
@@ -191,7 +191,9 @@ function scoreResult(result: TavilySearchResult, input: PaperSearchInput) {
 }
 
 async function searchWithTavily(query: string, exactMatch: boolean) {
-  if (!env.tavilyApiKey) {
+  const tavilyApiKey = await getTavilyApiKey();
+
+  if (!tavilyApiKey) {
     return [];
   }
 
@@ -200,7 +202,7 @@ async function searchWithTavily(query: string, exactMatch: boolean) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${env.tavilyApiKey}`,
+        Authorization: `Bearer ${tavilyApiKey}`,
         "User-Agent": "Event2People/1.0",
       },
       body: JSON.stringify({

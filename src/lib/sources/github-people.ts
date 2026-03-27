@@ -1,6 +1,7 @@
 import * as cheerio from "cheerio";
 
 import { env } from "@/lib/env";
+import { getTavilyApiKey } from "@/lib/runtime-settings";
 import { compactInstitution, repoDisplayName, uniqueStrings } from "@/lib/text";
 import type { PersonInput, ProjectInput } from "@/lib/types";
 
@@ -412,7 +413,9 @@ async function fetchHomepageSignals(rawUrl: string) {
 }
 
 async function searchWithTavily(query: string) {
-  if (!env.tavilyApiKey) {
+  const tavilyApiKey = await getTavilyApiKey();
+
+  if (!tavilyApiKey) {
     return [];
   }
 
@@ -424,7 +427,7 @@ async function searchWithTavily(query: string) {
         "User-Agent": "Event2People/1.0",
       },
       body: JSON.stringify({
-        api_key: env.tavilyApiKey,
+        api_key: tavilyApiKey,
         query,
         search_depth: "basic",
         max_results: 6,
@@ -535,7 +538,9 @@ export function pickBestSearchResult(
 }
 
 async function enrichLinksWithSearch(context: GitHubOwnerContext, displayName: string, company: string) {
-  if (!env.tavilyApiKey) {
+  const tavilyApiKey = await getTavilyApiKey();
+
+  if (!tavilyApiKey) {
     return {
       linkedinUrl: "",
       scholarUrl: "",

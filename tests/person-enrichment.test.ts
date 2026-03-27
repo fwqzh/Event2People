@@ -33,8 +33,14 @@ describe("github owner enrichment helpers", () => {
     const context = {
       login: "alice-chen",
       ownerUrl: "https://github.com/alice-chen",
-      repoNames: ["open/alpha"],
-      repoDescriptions: ["Embodied agent runtime"],
+      repoRoles: [
+        {
+          repoName: "open/alpha",
+          repoDescription: "Embodied agent runtime",
+          isOwner: true,
+          contributions: 12,
+        },
+      ],
     };
 
     const url = pickBestSearchResult(

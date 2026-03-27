@@ -1,4 +1,4 @@
-import { env } from "@/lib/env";
+import { getTavilyApiKey } from "@/lib/runtime-settings";
 import { repoDisplayName, uniqueStrings } from "@/lib/text";
 import type { ProjectInput, ReferenceItem } from "@/lib/types";
 
@@ -122,7 +122,9 @@ function scoreResult(result: TavilySearchResult, project: Pick<ProjectInput, "re
 }
 
 async function searchWithTavily(query: string, exactMatch: boolean) {
-  if (!env.tavilyApiKey) {
+  const tavilyApiKey = await getTavilyApiKey();
+
+  if (!tavilyApiKey) {
     return [];
   }
 
@@ -131,7 +133,7 @@ async function searchWithTavily(query: string, exactMatch: boolean) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${env.tavilyApiKey}`,
+        Authorization: `Bearer ${tavilyApiKey}`,
         "User-Agent": "Event2People/1.0",
       },
       body: JSON.stringify({
@@ -217,7 +219,9 @@ export async function enrichGitHubProjectsWithNarrativeContext(
   projects: ProjectInput[],
   onProgress?: (progress: GitHubProjectNarrativeProgress) => void | Promise<void>,
 ) {
-  if (!env.tavilyApiKey || projects.length === 0) {
+  const tavilyApiKey = await getTavilyApiKey();
+
+  if (!tavilyApiKey || projects.length === 0) {
     return projects;
   }
 

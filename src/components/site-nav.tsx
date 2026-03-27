@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { HeaderRefreshButton } from "@/components/header-refresh-button";
+import { HeaderSettingsButton } from "@/components/header-settings-button";
 
 type SiteNavProps = {
   lastUpdatedLabel: string | null;
@@ -14,6 +15,7 @@ export function SiteNav({ lastUpdatedLabel }: SiteNavProps) {
   const isGitHubActive = pathname === "/" || pathname === "/github";
   const isArxivActive = pathname === "/arxiv";
   const isPipelineActive = pathname === "/pipeline";
+  const isSettingsActive = pathname === "/settings";
 
   return (
     <nav className="site-nav" aria-label="主导航">
@@ -30,6 +32,7 @@ export function SiteNav({ lastUpdatedLabel }: SiteNavProps) {
       >
         Pipeline
       </Link>
+      <HeaderSettingsButton isActive={isSettingsActive} />
       <HeaderRefreshButton lastUpdatedLabel={lastUpdatedLabel} />
     </nav>
   );
