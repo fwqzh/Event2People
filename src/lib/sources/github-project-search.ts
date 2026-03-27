@@ -78,14 +78,14 @@ function containsChinese(value: string) {
   return /[\u4e00-\u9fff]/.test(value);
 }
 
-function buildPrimaryQuery(project: ProjectInput) {
+function buildPrimaryQuery(project: Pick<ProjectInput, "repoName" | "ownerName" | "repoDescriptionRaw">) {
   const displayName = repoDisplayName(project.repoName);
   return [`"${project.repoName}"`, displayName, project.ownerName, "开源 项目 是什么 做什么"]
     .filter(Boolean)
     .join(" ");
 }
 
-function buildFallbackQuery(project: ProjectInput) {
+function buildFallbackQuery(project: Pick<ProjectInput, "repoName" | "ownerName" | "repoDescriptionRaw">) {
   const displayName = repoDisplayName(project.repoName);
   return [
     displayName || project.repoName,
@@ -97,7 +97,7 @@ function buildFallbackQuery(project: ProjectInput) {
     .join(" ");
 }
 
-function scoreResult(result: TavilySearchResult, project: ProjectInput) {
+function scoreResult(result: TavilySearchResult, project: Pick<ProjectInput, "repoName" | "ownerName" | "repoDescriptionRaw">) {
   const displayName = repoDisplayName(project.repoName).toLowerCase();
   const haystack = `${result.title} ${result.content} ${result.url}`.toLowerCase();
   let score = 0;
@@ -164,7 +164,7 @@ async function searchWithTavily(query: string, exactMatch: boolean) {
         url: normalizeUrl(result.url),
         content: compactText(result.content),
       }))
-      .filter((result) => result.url && (result.title || result.content));
+      .filter((result: TavilySearchResult) => result.url && (result.title || result.content));
   } catch {
     return [];
   }

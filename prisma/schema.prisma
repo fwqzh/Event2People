@@ -172,7 +172,9 @@ model Paper {
   authorsCount      Int
   publishedAt       DateTime
   abstractRaw       String?
+  pdfTextRaw        String?
   codeUrl           String?
+  authorEmailsRaw   Json?
   institutionNamesRaw Json?
   relatedProjectIds Json?
   createdAt         DateTime       @default(now())

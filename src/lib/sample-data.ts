@@ -180,7 +180,10 @@ export function buildSampleDataset(now = new Date()): DatasetBundleInput {
       authorsCount: 2,
       publishedAt: subDays(now, 1),
       abstractRaw: "Embodied web interaction policy for robotics operators.",
+      pdfTextRaw:
+        "Abstract\nEmbodied web interaction policy for robotics operators.\n1 Introduction\nThis paper studies robot web execution.\n3 Method\nWe build an embodied web policy.\n6 Conclusion\nThe policy improves operator workflows.",
       codeUrl: "https://github.com/alice-chen/vox-agent",
+      authorEmailsRaw: ["alice@alicechen.ai", "jian@cmu.edu"],
       institutionNamesRaw: ["Tsinghua University", "Shanghai AI Laboratory"],
       relatedProjectStableIds: ["repo:alice-chen/vox-agent"],
     },
@@ -192,6 +195,9 @@ export function buildSampleDataset(now = new Date()): DatasetBundleInput {
       authorsCount: 2,
       publishedAt: subDays(now, 2),
       abstractRaw: "Planning primitives for embodied agents in cluttered scenes.",
+      pdfTextRaw:
+        "Abstract\nPlanning primitives for embodied agents in cluttered scenes.\n1 Introduction\nWe study long-horizon embodied planning.\n3 Method\nWe introduce a planning kernel with reusable primitives.\n5 Experiments\nThe kernel improves robustness.\n6 Conclusion\nThe planning kernel generalizes across tasks.",
+      authorEmailsRaw: ["jian@cmu.edu", "sofia@mit.edu"],
       institutionNamesRaw: ["Tsinghua University", "Shanghai AI Laboratory"],
     },
     {
@@ -202,6 +208,9 @@ export function buildSampleDataset(now = new Date()): DatasetBundleInput {
       authorsCount: 2,
       publishedAt: subDays(now, 2),
       abstractRaw: "Observation and reasoning stack for multimodal enterprise agents.",
+      pdfTextRaw:
+        "Abstract\nObservation and reasoning stack for multimodal enterprise agents.\n1 Introduction\nWe study observation bottlenecks in multimodal agents.\n3 Framework\nWe build an observation stack.\n6 Conclusion\nThe stack stabilizes downstream reasoning.",
+      authorEmailsRaw: ["marvin@openai.com", "noah@nvidia.com"],
       institutionNamesRaw: ["OpenAI", "Stanford University"],
     },
     {
@@ -212,6 +221,9 @@ export function buildSampleDataset(now = new Date()): DatasetBundleInput {
       authorsCount: 1,
       publishedAt: subDays(now, 3),
       abstractRaw: "Voice-first planning for conversational agents.",
+      pdfTextRaw:
+        "Abstract\nVoice-first planning for conversational agents.\n1 Introduction\nWe focus on voice-native planning.\n3 Method\nWe build a voice planning system.\n6 Conclusion\nThe system improves speech interaction planning.",
+      authorEmailsRaw: ["sofia@mit.edu"],
       institutionNamesRaw: ["Audio Lab"],
       relatedProjectStableIds: ["repo:audio-lab/voice-weaver"],
     },

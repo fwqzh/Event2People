@@ -71,6 +71,40 @@ describe("paper Chinese explanation", () => {
     );
   });
 
+  it("distinguishes different execution-policy papers by their concrete task", () => {
+    const gift = buildPaperExplanationZh({
+      paperTitle: "GIFT: Generalizing Intent for Flexible Test-Time Rewards",
+      abstractRaw:
+        "Robots learn reward functions from user demonstrations. We present GIFT to generalize intent for flexible test-time rewards.",
+      eventTag: "Robotics",
+      hasCode: false,
+      relatedRepoCount: 0,
+    });
+    const uniDex = buildPaperExplanationZh({
+      paperTitle: "UniDex: A Robot Foundation Suite for Universal Dexterous Hand Control from Egocentric Human Videos",
+      abstractRaw:
+        "We present UniDex, a robot foundation suite with a unified vision-language-action policy for universal dexterous hand control.",
+      eventTag: "Robotics",
+      hasCode: false,
+      relatedRepoCount: 0,
+    });
+    const gapg = buildPaperExplanationZh({
+      paperTitle: "GAPG: Geometry Aware Push-Grasping Synergy for Goal-Oriented Manipulation in Clutter",
+      abstractRaw:
+        "We introduce a push-grasping synergy policy for goal-oriented manipulation in cluttered scenes.",
+      eventTag: "Robotics",
+      hasCode: false,
+      relatedRepoCount: 0,
+    });
+
+    expect(gift.problem).toContain("奖励建模与意图泛化");
+    expect(gift.method).toContain("GIFT");
+    expect(uniDex.problem).toContain("灵巧手控制");
+    expect(uniDex.method).toContain("UniDex");
+    expect(gapg.problem).toContain("推抓协同操作");
+    expect(gapg.method).toContain("GAPG");
+  });
+
   it("still recognizes explicit benchmark or dataset papers", () => {
     const result = buildPaperExplanationZh({
       paperTitle: "Embodied Web Benchmark Dataset",

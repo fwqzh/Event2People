@@ -9,6 +9,7 @@ import {
 } from "@/lib/github-copy";
 import { generateGitHubProjectAnalysis } from "@/lib/github-project-analysis";
 import { readStringArray } from "@/lib/json";
+import { generatePaperAnalysis } from "@/lib/paper-analysis";
 import { buildPaperExplanationZh, buildPaperTopicView } from "@/lib/paper-copy";
 import { buildPersonLinks } from "@/lib/person-links";
 import { prisma } from "@/lib/prisma";
@@ -59,7 +60,9 @@ type PaperRecord = {
   authorsCount: number;
   publishedAt: Date;
   abstractRaw: string | null;
+  pdfTextRaw: string | null;
   codeUrl: string | null;
+  authorEmailsRaw: Prisma.JsonValue | null;
   institutionNamesRaw: Prisma.JsonValue | null;
   relatedProjectIds: Prisma.JsonValue;
 };
@@ -223,7 +226,7 @@ function buildSourceSummary(
   const summary =
     sourceType === "github"
       ? uniqueCopyParts([project?.repoDescriptionRaw]).join(" ")
-      : uniqueCopyParts([paper?.abstractRaw]).join(" ");
+      : uniqueCopyParts([paper?.pdfTextRaw, paper?.abstractRaw]).join(" ");
 
   return clampCopy(summary || fallback, limit);
 }
@@ -245,6 +248,7 @@ function buildArxivNarrative(
 
   return buildPaperExplanationZh({
     paperTitle: paper.paperTitle,
+    contentRaw: paper.pdfTextRaw,
     abstractRaw: paper.abstractRaw,
     eventTag: event.eventTag as EventSummaryView["eventTag"],
     hasCode: Boolean(paper.codeUrl || (event.relatedRepoCount ?? 0) > 0),
@@ -273,6 +277,8 @@ function buildArxivMetadata(
   if (!paper) {
     return {
       publishedAtLabel: "",
+      authors: [],
+      authorEmails: [],
       institutions: [],
       keywords: [],
       topic: event.eventTag as EventSummaryView["eventTag"],
@@ -281,15 +287,20 @@ function buildArxivMetadata(
 
   const topicView = buildPaperTopicView({
     paperTitle: paper.paperTitle,
+    contentRaw: paper.pdfTextRaw,
     abstractRaw: paper.abstractRaw,
     eventTag: event.eventTag as EventSummaryView["eventTag"],
   });
+  const authors = [...new Set(readStringArray(paper.authorsJson))];
+  const authorEmails = [...new Set(readStringArray(paper.authorEmailsRaw))];
   const institutionsFromPaper = readStringArray(paper.institutionNamesRaw).map((value) => compactInstitution(value));
   const institutionsFromPeople = people.map((link) => getPersonPrimaryInstitution(link.person)).filter(Boolean);
   const institutions = institutionsFromPaper.length > 0 ? institutionsFromPaper : institutionsFromPeople;
 
   return {
     publishedAtLabel: formatDay(paper.publishedAt),
+    authors,
+    authorEmails,
     institutions: [...new Set(institutions)].slice(0, 3),
     keywords: topicView.keywords,
     topic: topicView.topic,
@@ -625,40 +636,75 @@ export async function getActiveEventDetailByStableId(stableId: string) {
 export async function getActiveEventAnalysisByStableId(stableId: string): Promise<EventAnalysisView | null> {
   const event = await getActiveEventByStableId(stableId);
 
-  if (!event || event.sourceType !== "github") {
+  if (!event) {
     return null;
   }
 
-  const project = event.projectLinks[0]?.project;
+  if (event.sourceType === "github") {
+    const project = event.projectLinks[0]?.project;
 
-  if (!project) {
-    return null;
+    if (!project) {
+      return null;
+    }
+
+    const detail = mapEventDetail(event);
+    const analysis = await generateGitHubProjectAnalysis({
+      stableId: event.stableId,
+      eventTitleZh: event.eventTitleZh,
+      eventHighlightZh: event.eventHighlightZh,
+      eventTag: event.eventTag,
+      detailSummary: detail.detailSummary,
+      metrics: parseMetrics(event.metricsJson),
+      project: {
+        repoName: project.repoName,
+        ownerName: project.ownerName,
+        repoDescriptionRaw: project.repoDescriptionRaw,
+        readmeExcerptRaw: project.readmeExcerptRaw,
+      },
+      people: event.personLinks.map((link) => ({
+        name: link.person.name,
+        contributionCount: link.contributionCount,
+        identitySummaryZh: link.person.identitySummaryZh,
+      })),
+    });
+
+    return {
+      stableId: event.stableId,
+      analysisSummary: analysis.analysisSummary,
+      analysisReferences: analysis.analysisReferences,
+    };
   }
 
-  const detail = mapEventDetail(event);
-  const analysis = await generateGitHubProjectAnalysis({
-    stableId: event.stableId,
-    eventTitleZh: event.eventTitleZh,
-    eventHighlightZh: event.eventHighlightZh,
-    eventTag: event.eventTag,
-    detailSummary: detail.detailSummary,
-    metrics: parseMetrics(event.metricsJson),
-    project: {
-      repoName: project.repoName,
-      ownerName: project.ownerName,
-      repoDescriptionRaw: project.repoDescriptionRaw,
-      readmeExcerptRaw: project.readmeExcerptRaw,
-    },
-    people: event.personLinks.map((link) => ({
-      name: link.person.name,
-      contributionCount: link.contributionCount,
-      identitySummaryZh: link.person.identitySummaryZh,
-    })),
-  });
+  if (event.sourceType === "arxiv") {
+    const paper = event.paperLinks[0]?.paper;
 
-  return {
-    stableId: event.stableId,
-    analysisSummary: analysis.analysisSummary,
-    analysisReferences: analysis.analysisReferences,
-  };
+    if (!paper) {
+      return null;
+    }
+
+    const analysis = await generatePaperAnalysis({
+      stableId: event.stableId,
+      eventTitleZh: event.eventTitleZh,
+      eventHighlightZh: event.eventHighlightZh,
+      eventTag: event.eventTag as EventSummaryView["eventTag"],
+      relatedRepoCount: event.relatedRepoCount,
+      paper: {
+        paperTitle: paper.paperTitle,
+        paperUrl: paper.paperUrl,
+        authors: readStringArray(paper.authorsJson),
+        abstractRaw: paper.abstractRaw,
+        pdfTextRaw: paper.pdfTextRaw,
+        codeUrl: paper.codeUrl,
+      },
+    });
+
+    return {
+      stableId: event.stableId,
+      analysisSummary: analysis.analysisSummary,
+      analysisReferences: analysis.analysisReferences,
+      paperExplanation: analysis.paperExplanation,
+    };
+  }
+
+  return null;
 }

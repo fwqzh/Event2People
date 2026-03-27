@@ -15,6 +15,7 @@ export type PaperTopicView = {
 
 type PaperNarrativeInput = {
   paperTitle: string;
+  contentRaw?: string | null;
   abstractRaw?: string | null;
   eventTag: EventTag;
   hasCode: boolean;
@@ -36,6 +37,11 @@ type FocusRule = {
   titleKeywords: string[];
   abstractKeywords: string[];
   minScore?: number;
+};
+
+type PolicyDetailRule = {
+  keywords: string[];
+  label: string;
 };
 
 const TOPIC_RULES: Array<{ keywords: string[]; label: string }> = [
@@ -99,6 +105,17 @@ const FOCUS_RULES: FocusRule[] = [
     ],
     minScore: 2,
   },
+];
+
+const POLICY_DETAIL_RULES: PolicyDetailRule[] = [
+  { keywords: ["push", "grasp", "clutter"], label: "推抓协同操作" },
+  { keywords: ["dexterous", "hand", "egocentric"], label: "灵巧手控制" },
+  { keywords: ["reward", "intent", "demonstration", "test-time"], label: "奖励建模与意图泛化" },
+  { keywords: ["social", "behavior", "critic"], label: "社交行为生成" },
+  { keywords: ["photography", "aesthetic", "viewpoint", "camera"], label: "摄影构图与视角控制" },
+  { keywords: ["visuomotor", "flow"], label: "视觉驱动动作生成" },
+  { keywords: ["multi-task", "reinforcement learning"], label: "多任务机械臂操作" },
+  { keywords: ["manipulation"], label: "机械臂操作" },
 ];
 
 function compactText(value: string | null | undefined) {
@@ -241,7 +258,11 @@ function getFocusDescriptor(paperTitle: string, abstractRaw?: string | null) {
   };
 }
 
-function buildProblemSentence(topicLabel: string, focus: FocusCategory) {
+function getPolicyExecutionLabel(haystack: string) {
+  return POLICY_DETAIL_RULES.find((rule) => hasAnyKeyword(haystack, rule.keywords))?.label ?? "动作生成与控制";
+}
+
+function buildProblemSentence(topicLabel: string, focus: FocusCategory, focusDetailLabel = "") {
   switch (focus) {
     case "benchmark":
       return `这篇论文想解决的是 ${topicLabel} 方向里任务定义分散、评测口径不统一，导致不同方案难以客观比较的问题。`;
@@ -250,7 +271,7 @@ function buildProblemSentence(topicLabel: string, focus: FocusCategory) {
     case "system":
       return `这篇论文想解决的是 ${topicLabel} 任务中感知、推理、执行模块彼此割裂，整体链路不够顺的问题。`;
     case "policy":
-      return `这篇论文想解决的是 ${topicLabel} 任务里从输入理解到动作执行的映射不够直接，实际执行效率和稳定性不足的问题。`;
+      return `这篇论文想解决的是 ${topicLabel} 任务里 ${focusDetailLabel || "动作生成与控制"} 这一步过于依赖粗糙映射，导致执行效率和稳定性不足的问题。`;
     case "observation":
       return `这篇论文想解决的是 ${topicLabel} 任务里观测信息噪声大、状态表示不稳定，后续推理和执行容易被拖垮的问题。`;
     case "simulation":
@@ -261,7 +282,13 @@ function buildProblemSentence(topicLabel: string, focus: FocusCategory) {
   }
 }
 
-function buildMethodSentence(topicLabel: string, focus: FocusCategory, artifactLabel: string, paperHandle: string) {
+function buildMethodSentence(
+  topicLabel: string,
+  focus: FocusCategory,
+  artifactLabel: string,
+  paperHandle: string,
+  focusDetailLabel = "",
+) {
   const namedArtifact = paperHandle ? `把 “${paperHandle}” 做成一套 ${artifactLabel}` : `提出了一套 ${artifactLabel}`;
 
   switch (focus) {
@@ -277,8 +304,8 @@ function buildMethodSentence(topicLabel: string, focus: FocusCategory, artifactL
         : `方法上，它通过 ${artifactLabel} 重新组织感知、推理和执行之间的接口，让整条链路更容易协同。`;
     case "policy":
       return paperHandle
-        ? `方法上，它围绕 “${paperHandle}” 这套 ${artifactLabel} 组织动作生成，尽量缩短理解到执行之间的距离。`
-        : `方法上，它把核心能力落成一个更直接面向执行的 ${artifactLabel}，尽量缩短理解到动作之间的距离。`;
+        ? `方法上，它围绕 “${paperHandle}” 把 ${focusDetailLabel || "动作生成与控制"} 做成一套更直接面向执行的 ${artifactLabel}，尽量缩短理解到动作之间的距离。`
+        : `方法上，它把 ${focusDetailLabel || "核心能力"} 落成一套更直接面向执行的 ${artifactLabel}，尽量缩短理解到动作之间的距离。`;
     case "observation":
       return paperHandle
         ? `方法上，它围绕 “${paperHandle}” 重点处理 ${artifactLabel}，先把环境信息整理成更稳定的中间表示，再交给上层决策。`
@@ -340,13 +367,15 @@ function buildContributionSentence(
 }
 
 export function buildPaperExplanationZh(input: PaperNarrativeInput): PaperExplanationView {
-  const haystack = `${input.paperTitle} ${compactText(input.abstractRaw)}`.toLowerCase();
-  const focus = getFocusDescriptor(input.paperTitle, input.abstractRaw);
+  const sourceText = compactText(input.contentRaw ?? input.abstractRaw);
+  const haystack = `${input.paperTitle} ${sourceText}`.toLowerCase();
+  const focus = getFocusDescriptor(input.paperTitle, sourceText);
   const topicLabel = getTopicLabel(haystack, input.eventTag, focus.category);
   const relatedRepoCount = input.relatedRepoCount ?? 0;
-  const paperHandle = getPaperHandle(input.paperTitle, input.abstractRaw);
-  const problem = buildProblemSentence(topicLabel, focus.category);
-  const method = buildMethodSentence(topicLabel, focus.category, focus.artifactLabel, paperHandle);
+  const paperHandle = getPaperHandle(input.paperTitle, sourceText);
+  const focusDetailLabel = focus.category === "policy" ? getPolicyExecutionLabel(haystack) : "";
+  const problem = buildProblemSentence(topicLabel, focus.category, focusDetailLabel);
+  const method = buildMethodSentence(topicLabel, focus.category, focus.artifactLabel, paperHandle, focusDetailLabel);
   const contribution = buildContributionSentence(focus.category, focus.artifactLabel, input.hasCode, relatedRepoCount);
   const lead = clampPlainText(
     [problem, method.replace(/^方法上，/, "")].join(" "),
@@ -361,9 +390,10 @@ export function buildPaperExplanationZh(input: PaperNarrativeInput): PaperExplan
   };
 }
 
-export function buildPaperTopicView(input: Pick<PaperNarrativeInput, "paperTitle" | "abstractRaw" | "eventTag">): PaperTopicView {
-  const haystack = `${input.paperTitle} ${compactText(input.abstractRaw)}`.toLowerCase();
-  const focus = getFocusDescriptor(haystack);
+export function buildPaperTopicView(input: Pick<PaperNarrativeInput, "paperTitle" | "contentRaw" | "abstractRaw" | "eventTag">): PaperTopicView {
+  const sourceText = compactText(input.contentRaw ?? input.abstractRaw);
+  const haystack = `${input.paperTitle} ${sourceText}`.toLowerCase();
+  const focus = getFocusDescriptor(input.paperTitle, sourceText);
   const detectedTopicLabels = TOPIC_RULES.filter((rule) => hasAnyKeyword(haystack, rule.keywords)).map((rule) => rule.label);
   const topic = getTopicLabel(haystack, input.eventTag, focus.category).split("与")[0] ?? getTagTopicLabel(input.eventTag);
   const keywords = uniqueStrings([

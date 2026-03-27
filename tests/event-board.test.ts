@@ -106,9 +106,112 @@ describe("EventBoard", () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
+
+  it("starts preloading GitHub detail and analysis before the card is expanded", async () => {
+    vi.useFakeTimers();
+
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.includes("/api/pipeline")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ ok: true, savedPersonStableIds: [] }),
+        });
+      }
+
+      if (url.includes("/api/events/analysis")) {
+        return Promise.resolve(createAnalysisResponse());
+      }
+
+      return Promise.resolve(createResponse(createDetail()));
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      React.createElement(EventBoard, {
+        datasetVersionId: "dataset-1",
+        savedPersonStableIds: [],
+        githubEvents: [createSummaryEvent()],
+        arxivEvents: [],
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(400);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/events/detail?stableId=event%3Agithub%3Aopen-manu"),
+      expect.anything(),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/events/analysis?stableId=event%3Agithub%3Aopen-manu"),
+      expect.anything(),
+    );
+    expect(screen.getByRole("button", { name: "展开 open-manu" })).toBeInTheDocument();
+  });
+
+  it("does not refetch detail or analysis after collapsing and reopening the same loaded GitHub card", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.includes("/api/pipeline")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ ok: true, savedPersonStableIds: [] }),
+        });
+      }
+
+      if (url.includes("/api/events/analysis")) {
+        return Promise.resolve(
+          createAnalysisResponse({
+            analysisSummary: "这是已经生成好的详细解读。",
+            analysisReferences: [{ label: "知乎", title: "项目介绍", url: "https://www.zhihu.com/question/1" }],
+          }),
+        );
+      }
+
+      return Promise.resolve(createResponse(createDetail()));
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      React.createElement(EventBoard, {
+        datasetVersionId: "dataset-1",
+        savedPersonStableIds: [],
+        githubEvents: [createSummaryEvent()],
+        arxivEvents: [],
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "展开 open-manu" }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "收起 open-manu" })).toBeInTheDocument();
+    });
+
+    const requestCountAfterFirstOpen = fetchMock.mock.calls.filter(([input]) => {
+      const url = String(input);
+      return url.includes("/api/events/detail") || url.includes("/api/events/analysis");
+    }).length;
+
+    await user.click(screen.getByRole("button", { name: "收起 open-manu" }));
+    await user.click(screen.getByRole("button", { name: "展开 open-manu" }));
+    await new Promise((resolve) => window.setTimeout(resolve, 500));
+
+    const requestCountAfterReopen = fetchMock.mock.calls.filter(([input]) => {
+      const url = String(input);
+      return url.includes("/api/events/detail") || url.includes("/api/events/analysis");
+    }).length;
+
+    expect(requestCountAfterReopen).toBe(requestCountAfterFirstOpen);
+    expect(screen.queryByText("正在打开当前卡片详情")).not.toBeInTheDocument();
+  }, 15_000);
 
   it("shows a loading state for expanded content and keeps GitHub copy deduplicated", async () => {
     const user = userEvent.setup();
@@ -293,9 +396,12 @@ describe("EventBoard", () => {
     expect(vi.mocked(global.fetch).mock.calls.length).toBeGreaterThanOrEqual(5);
   });
 
-  it("retries a card after its previous detail request was aborted", async () => {
+  it("keeps background detail preloading alive when switching cards and reuses it on reopen", async () => {
     const user = userEvent.setup();
     let planningKernelDetailCalls = 0;
+    let planningKernelRequestAborted = false;
+    let resolvePlanningKernelDetail: ((value: { ok: boolean; json: () => Promise<{ detail: EventDetailView }> }) => void) | null =
+      null;
 
     vi.stubGlobal(
       "fetch",
@@ -309,20 +415,31 @@ describe("EventBoard", () => {
           });
         }
 
+        if (url.includes("/api/events/analysis")) {
+          return Promise.resolve(
+            createAnalysisResponse({
+              stableId: new URL(url, "http://localhost").searchParams.get("stableId") ?? "event:arxiv:planning-kernel",
+              paperExplanation: {
+                lead: "analysis fallback",
+                problem: "analysis fallback",
+                method: "analysis fallback",
+                contribution: "analysis fallback",
+              },
+            }),
+          );
+        }
+
         const stableId = new URL(url, "http://localhost").searchParams.get("stableId");
 
         if (stableId === "event:arxiv:planning-kernel") {
           planningKernelDetailCalls += 1;
 
           if (planningKernelDetailCalls === 1) {
-            return new Promise((_, reject) => {
-              init?.signal?.addEventListener(
-                "abort",
-                () => {
-                  reject(new DOMException("The operation was aborted.", "AbortError"));
-                },
-                { once: true },
-              );
+            return new Promise<{ ok: boolean; json: () => Promise<{ detail: EventDetailView }> }>((resolve) => {
+              resolvePlanningKernelDetail = resolve;
+              init?.signal?.addEventListener("abort", () => {
+                planningKernelRequestAborted = true;
+              });
             });
           }
 
@@ -403,13 +520,25 @@ describe("EventBoard", () => {
     });
 
     await user.click(screen.getByRole("button", { name: "展开 Planning Kernel" }));
+    expect(planningKernelDetailCalls).toBe(1);
+    expect(planningKernelRequestAborted).toBe(false);
 
-    await waitFor(() => {
-      expect(planningKernelDetailCalls).toBe(2);
-    });
-  });
+    resolvePlanningKernelDetail!(
+      createResponse(
+        createDetail({
+          stableId: "event:arxiv:planning-kernel",
+          sourceSummaryLabel: "论文解读",
+          introSummary: "planning kernel detail",
+          people: [],
+        }),
+      ),
+    );
 
-  it("shows a structured Chinese paper explanation for arxiv cards", async () => {
+    expect(await screen.findByText("planning kernel detail")).toBeInTheDocument();
+    expect(planningKernelRequestAborted).toBe(false);
+  }, 15_000);
+
+  it("hydrates arxiv cards with structured sourced paper analysis", async () => {
     const user = userEvent.setup();
     vi.stubGlobal(
       "fetch",
@@ -421,6 +550,35 @@ describe("EventBoard", () => {
             ok: true,
             json: async () => ({ ok: true, savedPersonStableIds: [] }),
           });
+        }
+
+        if (url.includes("/api/events/analysis")) {
+          return Promise.resolve(
+            createAnalysisResponse({
+              stableId: "event:arxiv:planning-kernel",
+              paperExplanation: {
+                lead: "这篇论文聚焦复杂任务规划，重点是把长链路决策拆成可组合的基础模块。",
+                problem:
+                  "这篇论文想解决的是复杂任务规划场景里决策链路长、步骤容易失稳的问题，中文解读普遍把它归到“把长任务拆成更稳定规划单元”的方向。[1]",
+                method:
+                  "方法上，它提出了一套规划内核与决策原语，把任务拆成更清晰的决策步骤，并通过模块化接口把推理和执行重新接起来。[1] [2]",
+                contribution:
+                  "核心贡献是把规划问题沉淀成更通用的基础模块，既方便横向复用，也降低了后续工程侧继续接入的门槛。[2]",
+              },
+              analysisReferences: [
+                {
+                  label: "机器之心",
+                  title: "Embodied Planning Kernel 论文解读",
+                  url: "https://www.jiqizhixin.com/articles/planning-kernel",
+                },
+                {
+                  label: "量子位",
+                  title: "Planning Kernel: 把长链规划拆成基础模块",
+                  url: "https://www.qbitai.com/2026/03/planning-kernel.html",
+                },
+              ],
+            }),
+          );
         }
 
         return Promise.resolve(
@@ -438,6 +596,8 @@ describe("EventBoard", () => {
               },
               paperMetadata: {
                 publishedAtLabel: "2025-03-02",
+                authors: ["Jian Wu", "Sofia Garcia"],
+                authorEmails: ["jian@tsinghua.edu.cn", "sofia@mit.edu"],
                 institutions: ["Tsinghua University", "Shanghai AI Lab"],
                 topic: "复杂任务规划",
                 keywords: ["复杂任务规划", "规划内核与决策原语", "具身智能任务"],
@@ -483,6 +643,10 @@ describe("EventBoard", () => {
     expect(screen.getByRole("link", { name: "https://arxiv.org/abs/2503.01022" })).toBeInTheDocument();
     expect(screen.getByText("论文发表时间")).toBeInTheDocument();
     expect(screen.getByText("2025-03-02")).toBeInTheDocument();
+    expect(screen.getByText("作者名单")).toBeInTheDocument();
+    expect(screen.getByText("Jian Wu / Sofia Garcia")).toBeInTheDocument();
+    expect(screen.getByText("作者邮箱")).toBeInTheDocument();
+    expect(screen.getByText("jian@tsinghua.edu.cn / sofia@mit.edu")).toBeInTheDocument();
     expect(screen.getByText("作者主要机构")).toBeInTheDocument();
     expect(screen.getByText("Tsinghua University / Shanghai AI Lab")).toBeInTheDocument();
     expect(screen.getByText("论文主题")).toBeInTheDocument();
@@ -490,8 +654,23 @@ describe("EventBoard", () => {
     expect(screen.getByText("论文关键词")).toBeInTheDocument();
     expect(screen.getByText("复杂任务规划 / 规划内核与决策原语 / 具身智能任务")).toBeInTheDocument();
     expect(screen.getAllByText("这篇论文聚焦复杂任务规划，重点是把长链路决策拆成可组合的基础模块。")).toHaveLength(1);
-    expect(screen.getByText("这篇论文想解决的是复杂任务规划场景里决策链路长、步骤容易失稳的问题。")).toBeInTheDocument();
-    expect(screen.getByText("方法上，它提出了一套规划内核与决策原语，把任务拆成更清晰的决策步骤。")).toBeInTheDocument();
-    expect(screen.getByText("核心贡献是把规划问题沉淀成更通用的基础模块，方便继续复用到不同任务链路里。")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "这篇论文想解决的是复杂任务规划场景里决策链路长、步骤容易失稳的问题，中文解读普遍把它归到“把长任务拆成更稳定规划单元”的方向。[1]",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "方法上，它提出了一套规划内核与决策原语，把任务拆成更清晰的决策步骤，并通过模块化接口把推理和执行重新接起来。[1] [2]",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "核心贡献是把规划问题沉淀成更通用的基础模块，既方便横向复用，也降低了后续工程侧继续接入的门槛。[2]",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("数据源")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Embodied Planning Kernel 论文解读" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Planning Kernel: 把长链规划拆成基础模块" })).toBeInTheDocument();
   });
 });

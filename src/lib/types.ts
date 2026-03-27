@@ -84,8 +84,10 @@ export type PaperInput = {
   authorsCount: number;
   publishedAt: Date;
   abstractRaw?: string | null;
+  pdfTextRaw?: string | null;
   codeUrl?: string | null;
   semanticScholarUrl?: string | null;
+  authorEmailsRaw?: string[];
   institutionNamesRaw?: string[];
   relatedProjectStableIds?: string[];
 };
@@ -178,6 +180,8 @@ export type EventDetailView = {
   paperExplanation?: PaperExplanationView | null;
   paperMetadata?: {
     publishedAtLabel: string;
+    authors: string[];
+    authorEmails: string[];
     institutions: string[];
     keywords: string[];
     topic: string;
@@ -188,6 +192,7 @@ export type EventAnalysisView = {
   stableId: string;
   analysisSummary: string | null;
   analysisReferences: ReferenceItem[];
+  paperExplanation?: PaperExplanationView | null;
 };
 
 export type PipelineEntryView = PipelineEntrySeedInput & {

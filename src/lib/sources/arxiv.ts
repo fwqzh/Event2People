@@ -2,7 +2,7 @@ import { subDays } from "date-fns";
 import { XMLParser } from "fast-xml-parser";
 
 import { env } from "@/lib/env";
-import { extractInstitutionNamesFromPdf } from "@/lib/pdf-paper-institutions";
+import { extractPaperDataFromPdf } from "@/lib/pdf-paper-institutions";
 
 export type ArxivPaperRecord = {
   rank: number;
@@ -17,6 +17,8 @@ export type ArxivPaperRecord = {
   primaryCategory: string;
   arxivUrl: string;
   pdfUrl: string;
+  pdfTextRaw: string;
+  authorEmailsRaw: string[];
   citationCount: number;
   influentialCitationCount: number;
   semanticScholarUrl: string;
@@ -32,6 +34,8 @@ type RawArxivPaperRecord = Omit<
   | "citationCount"
   | "influentialCitationCount"
   | "semanticScholarUrl"
+  | "pdfTextRaw"
+  | "authorEmailsRaw"
   | "institutionNamesRaw"
   | "venueBonus"
   | "recencyBonus"
@@ -339,6 +343,8 @@ async function enrichWithSemanticScholar(records: RawArxivPaperRecord[]) {
       citationCount: paperMetrics.citationCount,
       influentialCitationCount: paperMetrics.influentialCitationCount,
       semanticScholarUrl: paperMetrics.url,
+      pdfTextRaw: "",
+      authorEmailsRaw: [],
       institutionNamesRaw: [],
       venueBonus: score.venueBonus,
       recencyBonus: score.recencyBonus,
@@ -347,28 +353,39 @@ async function enrichWithSemanticScholar(records: RawArxivPaperRecord[]) {
   });
 }
 
-async function enrichWithPdfInstitutions(records: ArxivPaperRecord[]) {
+async function enrichWithPdfData(records: ArxivPaperRecord[]) {
   const results = await Promise.allSettled(
     records.map(async (record) => ({
       arxivId: record.arxivId,
-      institutionNamesRaw: await extractInstitutionNamesFromPdf(record.pdfUrl, record.authors),
+      pdfPaperData: await extractPaperDataFromPdf(record.pdfUrl, record.authors),
     })),
   );
 
-  const institutionsByArxivId = new Map<string, string[]>();
+  const pdfDataByArxivId = new Map<
+    string,
+    {
+      authors: string[];
+      emails: string[];
+      institutionNamesRaw: string[];
+      pdfTextRaw: string;
+    }
+  >();
 
   results.forEach((result) => {
     if (result.status === "fulfilled") {
-      institutionsByArxivId.set(result.value.arxivId, result.value.institutionNamesRaw);
+      pdfDataByArxivId.set(result.value.arxivId, result.value.pdfPaperData);
       return;
     }
 
-    console.warn("PDF institution extraction fallback:", result.reason instanceof Error ? result.reason.message : "unknown pdf error");
+    console.warn("PDF paper extraction fallback:", result.reason instanceof Error ? result.reason.message : "unknown pdf error");
   });
 
   return records.map((record) => ({
     ...record,
-    institutionNamesRaw: institutionsByArxivId.get(record.arxivId) ?? [],
+    authors: pdfDataByArxivId.get(record.arxivId)?.authors ?? record.authors,
+    authorEmailsRaw: pdfDataByArxivId.get(record.arxivId)?.emails ?? [],
+    institutionNamesRaw: pdfDataByArxivId.get(record.arxivId)?.institutionNamesRaw ?? [],
+    pdfTextRaw: pdfDataByArxivId.get(record.arxivId)?.pdfTextRaw ?? "",
   }));
 }
 
@@ -388,9 +405,11 @@ export async function fetchArxivPapers(limit = 10) {
       .map((record, index) => ({
         ...record,
         rank: index + 1,
+        pdfTextRaw: "",
+        authorEmailsRaw: [],
         institutionNamesRaw: [],
       }));
-    const topRecords = await enrichWithPdfInstitutions(rankedRecords);
+    const topRecords = await enrichWithPdfData(rankedRecords);
 
     if (topRecords.length > 0) {
       arxivCache = {

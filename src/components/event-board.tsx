@@ -54,9 +54,12 @@ export function EventBoard({
   arxivEvents,
   visibleSources,
 }: EventBoardProps) {
-  const detailRequestRef = useRef<{ stableId: string; controller: AbortController } | null>(null);
-  const analysisRequestRef = useRef<{ stableId: string; controller: AbortController } | null>(null);
+  const detailRequestControllersRef = useRef<Map<string, AbortController>>(new Map());
+  const analysisRequestControllersRef = useRef<Map<string, AbortController>>(new Map());
   const detailLoadingTimerRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const warmedEventIdsRef = useRef<Set<string>>(new Set());
+  const detailLoadTokenRef = useRef<Map<string, number>>(new Map());
+  const analysisLoadTokenRef = useRef<Map<string, number>>(new Map());
   const [serverSavedPersonIds, setServerSavedPersonIds] = useState<string[]>(savedPersonStableIds);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [isExpandedIdHydrated, setIsExpandedIdHydrated] = useState(false);
@@ -104,27 +107,56 @@ export function EventBoard({
     }
   });
 
-  const abortDetailRequest = useEffectEvent(() => {
-    if (detailRequestRef.current) {
-      const { stableId } = detailRequestRef.current;
-      detailRequestRef.current.controller.abort();
-      detailRequestRef.current = null;
+  const abortDetailRequest = useEffectEvent((stableId?: string) => {
+    if (stableId) {
+      const controller = detailRequestControllersRef.current.get(stableId);
+
+      if (!controller) {
+        return;
+      }
+
+      controller.abort();
+      detailRequestControllersRef.current.delete(stableId);
       setDetailStatusById((current) =>
         current[stableId] === "loading" ? { ...current, [stableId]: "idle" } : current,
       );
       setDetailLoadingVisibleById((current) => ({ ...current, [stableId]: false }));
+      return;
     }
+
+    detailRequestControllersRef.current.forEach((controller, currentStableId) => {
+      controller.abort();
+      setDetailStatusById((current) =>
+        current[currentStableId] === "loading" ? { ...current, [currentStableId]: "idle" } : current,
+      );
+      setDetailLoadingVisibleById((current) => ({ ...current, [currentStableId]: false }));
+    });
+    detailRequestControllersRef.current.clear();
   });
 
-  const abortAnalysisRequest = useEffectEvent(() => {
-    if (analysisRequestRef.current) {
-      const { stableId } = analysisRequestRef.current;
-      analysisRequestRef.current.controller.abort();
-      analysisRequestRef.current = null;
+  const abortAnalysisRequest = useEffectEvent((stableId?: string) => {
+    if (stableId) {
+      const controller = analysisRequestControllersRef.current.get(stableId);
+
+      if (!controller) {
+        return;
+      }
+
+      controller.abort();
+      analysisRequestControllersRef.current.delete(stableId);
       setAnalysisStatusById((current) =>
         current[stableId] === "loading" ? { ...current, [stableId]: "idle" } : current,
       );
+      return;
     }
+
+    analysisRequestControllersRef.current.forEach((controller, currentStableId) => {
+      controller.abort();
+      setAnalysisStatusById((current) =>
+        current[currentStableId] === "loading" ? { ...current, [currentStableId]: "idle" } : current,
+      );
+    });
+    analysisRequestControllersRef.current.clear();
   });
 
   async function syncSavedPeople() {
@@ -145,15 +177,18 @@ export function EventBoard({
     }
   }
 
-  const loadEventDetail = useEffectEvent(async (stableId: string) => {
+  const loadEventDetail = useEffectEvent(async (stableId: string, reloadToken = 0) => {
     if (detailsById[stableId] || detailStatusById[stableId] === "loading") {
       return;
     }
 
-    abortDetailRequest();
+    if (detailStatusById[stableId] === "error" && detailLoadTokenRef.current.get(stableId) === reloadToken) {
+      return;
+    }
 
     const controller = new AbortController();
-    detailRequestRef.current = { stableId, controller };
+    detailLoadTokenRef.current.set(stableId, reloadToken);
+    detailRequestControllersRef.current.set(stableId, controller);
     setDetailStatusById((current) => ({ ...current, [stableId]: "loading" }));
     setDetailLoadingVisibleById((current) => ({ ...current, [stableId]: false }));
     setDetailErrorById((current) => {
@@ -210,27 +245,48 @@ export function EventBoard({
     } finally {
       clearDetailLoadingTimer(stableId);
 
-      if (detailRequestRef.current?.stableId === stableId) {
-        detailRequestRef.current = null;
+      if (detailRequestControllersRef.current.get(stableId) === controller) {
+        detailRequestControllersRef.current.delete(stableId);
       }
     }
   });
 
-  const loadEventAnalysis = useEffectEvent(async (stableId: string) => {
-    const existingAnalysis = analysisById[stableId] ?? detailsById[stableId];
+  const loadEventAnalysis = useEffectEvent(async (stableId: string, reloadToken = 0) => {
+    const sourceType = eventSourceById.get(stableId);
+    const existingAnalysis = analysisById[stableId];
+    const existingDetail = detailsById[stableId];
+
+    if (!sourceType || analysisStatusById[stableId] === "loading") {
+      return;
+    }
 
     if (
-      analysisStatusById[stableId] === "loading" ||
-      existingAnalysis?.analysisSummary ||
-      existingAnalysis?.analysisReferences?.length
+      (analysisStatusById[stableId] === "ready" || analysisStatusById[stableId] === "error") &&
+      analysisLoadTokenRef.current.get(stableId) === reloadToken
     ) {
       return;
     }
 
-    abortAnalysisRequest();
+    if (
+      sourceType === "github" &&
+      (existingAnalysis?.analysisSummary ||
+        existingAnalysis?.analysisReferences?.length ||
+        existingDetail?.analysisSummary ||
+        existingDetail?.analysisReferences?.length)
+    ) {
+      return;
+    }
+
+    if (
+      sourceType === "arxiv" &&
+      (existingAnalysis?.paperExplanation || existingAnalysis?.analysisReferences?.length)
+    ) {
+      return;
+    }
 
     const controller = new AbortController();
-    analysisRequestRef.current = { stableId, controller };
+    analysisLoadTokenRef.current.set(stableId, reloadToken);
+    analysisRequestControllersRef.current.set(stableId, controller);
     setAnalysisStatusById((current) => ({ ...current, [stableId]: "loading" }));
     setAnalysisErrorById((current) => {
       const next = { ...current };
@@ -286,19 +342,18 @@ export function EventBoard({
         [stableId]: error instanceof Error ? error.message : "详细解读加载失败",
       }));
     } finally {
-      if (analysisRequestRef.current?.stableId === stableId) {
-        analysisRequestRef.current = null;
+      if (analysisRequestControllersRef.current.get(stableId) === controller) {
+        analysisRequestControllersRef.current.delete(stableId);
       }
     }
   });
 
-  const warmEventCard = useEffectEvent(async (stableId: string) => {
-    if (eventSourceById.get(stableId) === "github") {
-      await Promise.allSettled([loadEventDetail(stableId), loadEventAnalysis(stableId)]);
-      return;
-    }
+  const warmEventCard = useEffectEvent((stableId: string) => {
+    void loadEventDetail(stableId, 0);
 
-    await loadEventDetail(stableId);
+    if (eventSourceById.get(stableId) === "github") {
+      void loadEventAnalysis(stableId, 0);
+    }
   });
 
   const onEscape = useEffectEvent((event: KeyboardEvent) => {
@@ -361,6 +416,11 @@ export function EventBoard({
     setRemovedPersonIds(new Set());
     setNewlySavedPersonIds(new Set());
     setAnalysisById({});
+    warmedEventIdsRef.current.clear();
+    detailLoadTokenRef.current.clear();
+    analysisLoadTokenRef.current.clear();
+    abortDetailRequest();
+    abortAnalysisRequest();
   }, [datasetVersionId]);
 
   useEffect(() => {
@@ -397,55 +457,53 @@ export function EventBoard({
 
   useEffect(() => {
     if (!expandedId) {
-      abortDetailRequest();
-      abortAnalysisRequest();
       return;
     }
 
-    void loadEventDetail(expandedId);
+    void loadEventDetail(expandedId, expandedReloadToken);
   }, [datasetVersionId, expandedId, expandedReloadToken, eventSourceById]);
 
   useEffect(() => {
-    if (!expandedId || eventSourceById.get(expandedId) !== "github") {
+    if (!expandedId || !eventSourceById.get(expandedId)) {
       return;
     }
 
-    void loadEventAnalysis(expandedId);
+    void loadEventAnalysis(expandedId, expandedReloadToken);
   }, [expandedId, expandedReloadToken, eventSourceById]);
 
   useEffect(() => {
-    const warmIds = githubEvents.slice(0, WARMUP_GITHUB_COUNT).map((event) => event.stableId);
+    if (collapsedSections.github) {
+      return;
+    }
+
+    const warmIds = githubEvents
+      .slice(0, Math.max(visibleCounts.github, WARMUP_GITHUB_COUNT))
+      .map((event) => event.stableId)
+      .filter((stableId) => !warmedEventIdsRef.current.has(stableId));
+
+    if (warmIds.length === 0) {
+      return;
+    }
+
     let cancelled = false;
-    let warmupHandle: ReturnType<typeof setTimeout> | null = null;
+    const warmupHandles = warmIds.map((stableId, index) => {
+      warmedEventIdsRef.current.add(stableId);
 
-    const runWarmup = async () => {
-      for (const stableId of warmIds) {
+      return window.setTimeout(() => {
         if (cancelled) {
           return;
         }
 
-        await warmEventCard(stableId);
-
-        if (cancelled) {
-          return;
-        }
-
-        await new Promise((resolve) => window.setTimeout(resolve, 120));
-      }
-    };
-
-    warmupHandle = window.setTimeout(() => {
-      void runWarmup();
-    }, 300);
+        warmEventCard(stableId);
+      }, 300 + index * 120);
+    });
 
     return () => {
       cancelled = true;
 
-      if (warmupHandle !== null) {
-        clearTimeout(warmupHandle);
-      }
+      warmupHandles.forEach((handle) => clearTimeout(handle));
     };
-  }, [datasetVersionId, githubEvents]);
+  }, [collapsedSections.github, datasetVersionId, githubEvents, visibleCounts.github]);
 
   useEffect(
     () => () => {
@@ -782,18 +840,36 @@ export function EventBoard({
               const showEventLens = Boolean(detail) && detail.detailSummary !== event.eventHighlightZh;
               const analysisParagraphs = getAnalysisParagraphs(analysis);
               const showBlockingDetailLoading = isDetailLoading && !detail && detailLoadingVisibleById[event.stableId];
-              const showAnalysisLoading =
+              const showGitHubAnalysisLoading =
                 isExpanded &&
                 event.sourceType === "github" &&
                 Boolean(detail) &&
                 analysisParagraphs.length === 0 &&
                 analysisStatus === "loading";
-              const showAnalysisError =
+              const showGitHubAnalysisError =
                 isExpanded &&
                 event.sourceType === "github" &&
                 Boolean(detail) &&
                 analysisParagraphs.length === 0 &&
                 analysisStatus === "error";
+              const showArxivAnalysisLoading =
+                isExpanded &&
+                event.sourceType === "arxiv" &&
+                Boolean(detail) &&
+                (detail.analysisReferences?.length ?? 0) === 0 &&
+                analysisStatus === "loading";
+              const showArxivAnalysisError =
+                isExpanded &&
+                event.sourceType === "arxiv" &&
+                Boolean(detail) &&
+                (detail.analysisReferences?.length ?? 0) === 0 &&
+                analysisStatus === "error";
+              const showArxivAnalysisFallbackNote =
+                isExpanded &&
+                event.sourceType === "arxiv" &&
+                Boolean(detail) &&
+                (detail.analysisReferences?.length ?? 0) === 0 &&
+                analysisStatus === "ready";
               const primaryDetailPanelTitle = event.sourceType === "github" ? "项目信号" : detail?.sourceSummaryLabel ?? "论文简介";
               const primaryDetailPanelClassName = event.sourceType === "arxiv" ? "detail-panel detail-panel--wide" : "detail-panel";
               const people =
@@ -1008,6 +1084,22 @@ export function EventBoard({
                                       <p>{detail.paperMetadata!.publishedAtLabel || "暂未识别"}</p>
                                     </article>
                                     <article className="paper-metadata-item">
+                                      <strong>作者名单</strong>
+                                      <p>
+                                        {detail.paperMetadata!.authors.length > 0
+                                          ? detail.paperMetadata!.authors.join(" / ")
+                                          : "暂未识别到作者名单"}
+                                      </p>
+                                    </article>
+                                    <article className="paper-metadata-item">
+                                      <strong>作者邮箱</strong>
+                                      <p>
+                                        {detail.paperMetadata!.authorEmails.length > 0
+                                          ? detail.paperMetadata!.authorEmails.join(" / ")
+                                          : "暂未识别到作者邮箱"}
+                                      </p>
+                                    </article>
+                                    <article className="paper-metadata-item">
                                       <strong>作者主要机构</strong>
                                       <p>
                                         {detail.paperMetadata!.institutions.length > 0
@@ -1028,6 +1120,58 @@ export function EventBoard({
                                       </p>
                                     </article>
                                   </div>
+                                ) : null}
+                                {event.sourceType === "arxiv" && detail.analysisReferences && detail.analysisReferences.length > 0 ? (
+                                  <div className="detail-analysis-references">
+                                    <h6>数据源</h6>
+                                    <div className="link-list link-list--stacked">
+                                      {detail.analysisReferences.map((reference, index) => (
+                                        <p
+                                          key={`${event.stableId}-paper-reference-${reference.url}`}
+                                          className="link-list__text"
+                                        >
+                                          <span>[{index + 1}] {reference.label}：</span>
+                                          <Link href={reference.url} target="_blank" rel="noreferrer">
+                                            {reference.title}
+                                          </Link>
+                                        </p>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ) : null}
+                                {showArxivAnalysisLoading ? (
+                                  <div className="detail-panel__loading-row" aria-live="polite">
+                                    <span
+                                      className="detail-loading-panel__spinner detail-loading-panel__spinner--inline"
+                                      aria-hidden="true"
+                                    />
+                                    <p className="detail-panel__subcopy">
+                                      正在补充中文互联网来源和 AI 解读，不影响你先看论文基础信息。
+                                    </p>
+                                  </div>
+                                ) : null}
+                                {showArxivAnalysisError ? (
+                                  <>
+                                    <p className="detail-panel__subcopy">{analysisError ?? "中文互联网来源暂时加载失败"}</p>
+                                    <button
+                                      type="button"
+                                      className="text-action-button"
+                                      onClick={(clickEvent) => {
+                                        clickEvent.stopPropagation();
+                                        setDetailReloadTokenById((current) => ({
+                                          ...current,
+                                          [event.stableId]: (current[event.stableId] ?? 0) + 1,
+                                        }));
+                                      }}
+                                    >
+                                      重试解读
+                                    </button>
+                                  </>
+                                ) : null}
+                                {showArxivAnalysisFallbackNote ? (
+                                  <p className="detail-panel__subcopy">
+                                    暂未抓到稳定的中文互联网来源，当前解读先基于论文标题和摘要生成。
+                                  </p>
                                 ) : null}
                                 {showEventLens ? <p className="detail-panel__subcopy">事件判断：{event.eventHighlightZh}</p> : null}
                                 <div className="metric-column">
@@ -1069,7 +1213,7 @@ export function EventBoard({
                                 </section>
                               ) : null}
 
-                              {showAnalysisLoading ? (
+                              {showGitHubAnalysisLoading ? (
                                 <section className="detail-panel detail-panel--wide detail-panel--analysis">
                                   <h5>详细解读</h5>
                                   <div className="detail-panel__loading-row" aria-live="polite">
@@ -1084,7 +1228,7 @@ export function EventBoard({
                                 </section>
                               ) : null}
 
-                              {showAnalysisError ? (
+                              {showGitHubAnalysisError ? (
                                 <section className="detail-panel detail-panel--wide detail-panel--analysis">
                                   <h5>详细解读</h5>
                                   <p className="detail-panel__subcopy">{analysisError ?? "详细解读暂时生成失败"}</p>

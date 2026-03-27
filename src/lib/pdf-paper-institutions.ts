@@ -54,6 +54,15 @@ const ABSTRACT_LINE_PATTERN = /^(abstract|摘要)\b/i;
 const SECTION_START_PATTERN = /^(\d+(\.\d+)*)\s+(introduction|background|preliminar|related work|引言|背景)/i;
 const EMAIL_OR_URL_PATTERN = /@|https?:\/\/|www\./i;
 const AUTHOR_MARKER_PATTERN = /[*†‡§¶‖#]+|\b(corresponding author|equal contribution)\b/i;
+const SIMPLE_EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+const GROUPED_EMAIL_PATTERN = /\{([^{}@\n]+)\}@([A-Z0-9.-]+\.[A-Z]{2,})/gi;
+
+export type ExtractedPdfPaperData = {
+  pdfTextRaw: string;
+  authors: string[];
+  emails: string[];
+  institutionNamesRaw: string[];
+};
 
 function compactText(value: string | null | undefined) {
   return value?.replace(/\s+/g, " ").trim() ?? "";
@@ -61,6 +70,15 @@ function compactText(value: string | null | undefined) {
 
 function uniqueStrings(values: string[]) {
   return [...new Set(values.map((value) => compactText(value)).filter(Boolean))];
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeEmail(value: string | null | undefined) {
+  const normalized = compactText(value).replace(/^mailto:/i, "");
+  return /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(normalized) ? normalized : "";
 }
 
 function joinTokens(tokens: string[]) {
@@ -129,7 +147,7 @@ function buildTextLines(items: PdfTextToken[]) {
 
 function removeAuthorNames(text: string, authors: string[]) {
   return authors.reduce((result, author) => {
-    const escaped = author.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const escaped = escapeRegExp(author);
     return result.replace(new RegExp(escaped, "gi"), " ");
   }, text);
 }
@@ -217,7 +235,7 @@ function extractHeaderText(text: string) {
 
   const headerLines: string[] = [];
 
-  for (const line of lines.slice(0, 36)) {
+  for (const line of lines.slice(0, 80)) {
     if (ABSTRACT_LINE_PATTERN.test(line) || SECTION_START_PATTERN.test(line)) {
       break;
     }
@@ -250,6 +268,94 @@ function findInstitutionRegexMatches(headerBlock: string) {
   return matches.map((match) => compactText(match[1] ?? ""));
 }
 
+function extractEmailsFromText(text: string) {
+  const groupedEmails = [...text.matchAll(GROUPED_EMAIL_PATTERN)].flatMap((match) => {
+    const localParts = compactText(match[1])
+      .split(/\s*,\s*|\s*;\s*|\s*\/\s*/)
+      .map((part) => normalizeEmail(`${part}@${match[2]}`))
+      .filter(Boolean);
+
+    return localParts;
+  });
+
+  const simpleEmails = (text.match(SIMPLE_EMAIL_PATTERN) ?? []).map((value) => normalizeEmail(value)).filter(Boolean);
+
+  return uniqueStrings([...groupedEmails, ...simpleEmails]);
+}
+
+function looksLikePersonName(value: string) {
+  const candidate = compactText(value)
+    .replace(/^[\d\s,*†‡§¶‖#()\-–—]+/, "")
+    .replace(/[\d\s,*†‡§¶‖#()\-–—]+$/g, "")
+    .replace(/\s{2,}/g, " ");
+  const tokens = candidate.split(/\s+/).filter(Boolean);
+
+  if (tokens.length < 2 || tokens.length > 4) {
+    return false;
+  }
+
+  if (hasInstitutionSignal(candidate) || EMAIL_OR_URL_PATTERN.test(candidate) || ABSTRACT_LINE_PATTERN.test(candidate)) {
+    return false;
+  }
+
+  if (candidate.length > 48) {
+    return false;
+  }
+
+  return tokens.every((token) => /^[A-Z][A-Za-z.'’`-]*$/.test(token));
+}
+
+function extractAuthorNamesFromText(text: string, fallbackAuthors: string[]) {
+  const headerLines = extractHeaderText(text);
+  const headerBlock = headerLines.join("\n");
+  const matchedFallbackAuthors = uniqueStrings(
+    fallbackAuthors.filter((author) => new RegExp(`(^|\\b)${escapeRegExp(author)}($|\\b)`, "i").test(headerBlock)),
+  );
+
+  if (matchedFallbackAuthors.length > 0) {
+    return matchedFallbackAuthors;
+  }
+
+  const authorCandidates = headerLines
+    .slice(1, 20)
+    .flatMap((line) => {
+      const cleanedLine = compactText(
+        line
+          .replace(AUTHOR_MARKER_PATTERN, " ")
+          .replace(/[*†‡§¶‖#]/g, " ")
+          .replace(/\([^)]*(equal contribution|corresponding author)[^)]*\)/gi, " ")
+          .replace(/\s{2,}/g, " "),
+      );
+
+      if (!cleanedLine || hasInstitutionSignal(cleanedLine) || EMAIL_OR_URL_PATTERN.test(cleanedLine)) {
+        return [];
+      }
+
+      return cleanedLine
+        .split(/\s*,\s*|\s+and\s+|\s*&\s*|\s*;\s*/i)
+        .map((part) =>
+          compactText(part)
+            .replace(/^[\d\s,*†‡§¶‖#()\-–—]+/, "")
+            .replace(/[\d\s,*†‡§¶‖#()\-–—]+$/g, ""),
+        )
+        .filter(looksLikePersonName);
+    });
+
+  return uniqueStrings(authorCandidates);
+}
+
+export function extractPaperDataFromText(text: string, fallbackAuthors: string[]) {
+  const authors = extractAuthorNamesFromText(text, fallbackAuthors);
+  const resolvedAuthors = authors.length > 0 ? authors : fallbackAuthors;
+
+  return {
+    pdfTextRaw: text,
+    authors: resolvedAuthors,
+    emails: extractEmailsFromText(text),
+    institutionNamesRaw: extractInstitutionNamesFromText(text, resolvedAuthors),
+  } satisfies ExtractedPdfPaperData;
+}
+
 export function extractInstitutionNamesFromText(text: string, authors: string[]) {
   const headerLines = extractHeaderText(text);
   const headerBlock = headerLines.join("\n");
@@ -268,6 +374,11 @@ export function extractInstitutionNamesFromText(text: string, authors: string[])
 }
 
 export async function extractInstitutionNamesFromPdf(pdfUrl: string, authors: string[]) {
+  const extracted = await extractPaperDataFromPdf(pdfUrl, authors);
+  return extracted.institutionNamesRaw;
+}
+
+export async function extractPaperDataFromPdf(pdfUrl: string, fallbackAuthors: string[]) {
   const response = await fetch(pdfUrl, {
     headers: {
       "User-Agent": "Event2People/1.0",
@@ -286,10 +397,9 @@ export async function extractInstitutionNamesFromPdf(pdfUrl: string, authors: st
 
   try {
     const doc = await loadingTask.promise;
-    const maxPages = Math.min(doc.numPages, 2);
     const pageTexts: string[] = [];
 
-    for (let pageNumber = 1; pageNumber <= maxPages; pageNumber += 1) {
+    for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber += 1) {
       const page = await doc.getPage(pageNumber);
       const content = await page.getTextContent();
       const lines = buildTextLines(content.items as PdfTextToken[]);
@@ -297,7 +407,7 @@ export async function extractInstitutionNamesFromPdf(pdfUrl: string, authors: st
       page.cleanup();
     }
 
-    return extractInstitutionNamesFromText(pageTexts.join("\n"), authors);
+    return extractPaperDataFromText(pageTexts.join("\n\n"), fallbackAuthors);
   } finally {
     await loadingTask.destroy();
   }

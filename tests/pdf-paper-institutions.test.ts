@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { extractInstitutionNamesFromText } from "@/lib/pdf-paper-institutions";
+import { extractInstitutionNamesFromText, extractPaperDataFromText } from "@/lib/pdf-paper-institutions";
 
 describe("pdf paper institution extraction", () => {
   it("extracts institution names from a typical author block", () => {
@@ -36,5 +36,30 @@ The Robotics Institute benchmark is discussed in the body.
 
     expect(institutions).toHaveLength(2);
     expect(institutions).toEqual(expect.arrayContaining(["Carnegie Mellon University", "Stanford University"]));
+  });
+
+  it("extracts authors, grouped emails, and institutions from full paper text", () => {
+    const text = `
+Embodied Planning Kernel
+Jian Wu1, Sofia Garcia2
+1 Department of Automation, Tsinghua University
+2 Shanghai AI Laboratory
+{jian,sofia}@example.edu
+
+Abstract
+This paper studies embodied planning.
+
+1 Introduction
+...
+
+8 Appendix
+Additional analysis.
+`;
+
+    const parsed = extractPaperDataFromText(text, []);
+
+    expect(parsed.authors).toEqual(["Jian Wu", "Sofia Garcia"]);
+    expect(parsed.emails).toEqual(["jian@example.edu", "sofia@example.edu"]);
+    expect(parsed.institutionNamesRaw).toEqual(["Tsinghua University", "Shanghai AI Laboratory"]);
   });
 });

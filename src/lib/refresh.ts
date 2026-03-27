@@ -90,7 +90,9 @@ type StoredPaperRecord = {
   authorsCount: number;
   publishedAt: Date;
   abstractRaw: string | null;
+  pdfTextRaw: string | null;
   codeUrl: string | null;
+  authorEmailsRaw: Prisma.JsonValue | null;
   institutionNamesRaw: Prisma.JsonValue | null;
   relatedProjectIds: Prisma.JsonValue;
 };
@@ -285,7 +287,9 @@ function createPaperInputs(arxivPapers: Awaited<ReturnType<typeof fetchArxivPape
     authorsCount: paper.authors.length,
     publishedAt: paper.publishedAt,
     abstractRaw: paper.summary,
+    pdfTextRaw: paper.pdfTextRaw,
     semanticScholarUrl: paper.semanticScholarUrl,
+    authorEmailsRaw: paper.authorEmailsRaw,
     institutionNamesRaw: paper.institutionNamesRaw,
   }));
 }
@@ -299,7 +303,9 @@ function mapStoredPaperToInput(paper: StoredPaperRecord): PaperInput {
     authorsCount: paper.authorsCount,
     publishedAt: paper.publishedAt,
     abstractRaw: paper.abstractRaw,
+    pdfTextRaw: paper.pdfTextRaw,
     codeUrl: paper.codeUrl,
+    authorEmailsRaw: readStringArray(paper.authorEmailsRaw),
     institutionNamesRaw: readStringArray(paper.institutionNamesRaw),
     relatedProjectStableIds: readStringArray(paper.relatedProjectIds),
   };
@@ -332,7 +338,9 @@ async function loadArxivFallbackPaperInputs(prisma: ArxivRefreshFallbackPrisma, 
               authorsCount: true,
               publishedAt: true,
               abstractRaw: true,
+              pdfTextRaw: true,
               codeUrl: true,
+              authorEmailsRaw: true,
               institutionNamesRaw: true,
               relatedProjectIds: true,
             },
@@ -533,7 +541,7 @@ function buildGitHubEvents(
 function buildArxivEvents(papers: PaperInput[], confirmedLinksByPaper: Map<string, RepoPaperLinkInput[]>) {
   return papers.map((paper, index) => {
     const linkedProjects = confirmedLinksByPaper.get(paper.stableId) ?? [];
-    const tag = classifyEventTag([paper.paperTitle, paper.abstractRaw ?? ""]);
+    const tag = classifyEventTag([paper.paperTitle, paper.pdfTextRaw ?? paper.abstractRaw ?? ""]);
     const type = linkedProjects.length > 0 ? (paper.codeUrl ? "paper_with_code" : "implementation") : "new_paper";
 
     return {

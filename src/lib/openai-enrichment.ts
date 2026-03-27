@@ -288,7 +288,7 @@ function buildEventFacts(events: EventInput[], bundle: DatasetBundleInput) {
         authors: paper!.authors,
         authorsCount: paper!.authorsCount,
         hasCode: Boolean(paper!.codeUrl),
-        abstractRaw: trimForModel(paper!.abstractRaw),
+        abstractRaw: trimForModel(paper!.pdfTextRaw ?? paper!.abstractRaw, 1200),
       })),
     people: event.personStableIds
       .map((stableId) => personMap.get(stableId))
