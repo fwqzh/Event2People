@@ -93,4 +93,49 @@ This paper studies embodied planning.
       },
     ]);
   });
+
+  it("still finds affiliations when two-column pdf text pushes them after abstract lines", () => {
+    const text = `
+Reducing Oracle Feedback with Vision-Language Embeddings for
+Preference-Based RL
+Udita Ghosh 1 ∗, Dripta S. Raychaudhuri 2, Jiachen Li 1, Konstantinos Karydis 1, Amit Roy-Chowdhury 1
+Abstract — Preference-based reinforcement learning can learn
+effective reward functions from comparisons.
+I. INTRODUCTION
+This is the first body section in the extracted order.
+1 Univeristy of California, Riverside; 2 AWS AI Labs (Work done outside AWS)
+* Corresponding author: ughos002@ucr.edu
+II. RELATED WORK
+...
+`;
+
+    expect(extractInstitutionNamesFromText(text, [
+      "Udita Ghosh",
+      "Dripta S. Raychaudhuri",
+      "Jiachen Li",
+      "Konstantinos Karydis",
+      "Amit Roy-Chowdhury",
+    ])).toEqual(["University of California, Riverside", "AWS AI Labs"]);
+
+    expect(
+      extractAuthorAffiliationsFromText(text, [
+        "Udita Ghosh",
+        "Dripta S. Raychaudhuri",
+        "Jiachen Li",
+      ]),
+    ).toEqual([
+      {
+        author: "Udita Ghosh",
+        institutions: ["University of California, Riverside"],
+      },
+      {
+        author: "Dripta S. Raychaudhuri",
+        institutions: ["AWS AI Labs"],
+      },
+      {
+        author: "Jiachen Li",
+        institutions: ["University of California, Riverside"],
+      },
+    ]);
+  });
 });

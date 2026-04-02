@@ -2663,6 +2663,10 @@ body::after {
   gap: 14px;
 }
 
+.paper-explanation-list + .detail-analysis-copy {
+  margin-top: 22px;
+}
+
 .detail-analysis-copy p {
   margin-top: 0;
   line-height: 1.82;

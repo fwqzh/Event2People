@@ -1,3 +1,6 @@
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
 type PdfTextToken = {
   str?: string;
   transform?: number[];
@@ -16,6 +19,7 @@ type TextLine = {
 
 const INSTITUTION_KEYWORDS = [
   "university",
+  "univeristy",
   "université",
   "universitat",
   "universität",
@@ -73,6 +77,14 @@ function compactText(value: string | null | undefined) {
   return value?.replace(/\s+/g, " ").trim() ?? "";
 }
 
+function extractLeadLines(text: string, maxLines = 120) {
+  return text
+    .split("\n")
+    .map((line) => compactText(line))
+    .filter(Boolean)
+    .slice(0, maxLines);
+}
+
 function normalizeInstitutionSignalText(value: string) {
   return compactText(value)
     .replace(/^[\d\s,*†‡§¶‖#()\-–—]+/, "")
@@ -80,16 +92,29 @@ function normalizeInstitutionSignalText(value: string) {
     .trim();
 }
 
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function looksLikeInstitutionAcronym(value: string) {
   return /^[A-Z]{2,10}(?:\s+[A-Z]{2,10}){0,3}$/.test(normalizeInstitutionSignalText(value));
 }
 
-function uniqueStrings(values: string[]) {
-  return [...new Set(values.map((value) => compactText(value)).filter(Boolean))];
+function looksLikeSentenceFragment(value: string) {
+  const allowedLowercaseTokens = new Set(["of", "the", "and", "for", "at", "in", "on", "de", "di", "von", "la", "le"]);
+  const tokens = compactText(value)
+    .replace(/[(),.;:]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  const disallowedLowercaseTokens = tokens.filter(
+    (token) => /^[a-z][a-z-]+$/.test(token) && !allowedLowercaseTokens.has(token.toLowerCase()),
+  );
+
+  return disallowedLowercaseTokens.length >= 2;
 }
 
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.map((value) => compactText(value)).filter(Boolean))];
 }
 
 function normalizeEmail(value: string | null | undefined) {
@@ -172,10 +197,16 @@ function cleanInstitutionCandidate(candidate: string, authors: string[]) {
   let cleaned = compactText(candidate)
     .replace(/^[\d\s,*†‡§¶‖#()\-–—]+/, "")
     .replace(/[\d\s,*†‡§¶‖#()\-–—]+$/, "")
+    .replace(/\buniveristy\b/gi, "University")
     .replace(/\s{2,}/g, " ");
+
+  if (cleaned.includes("(") && !cleaned.includes(")")) {
+    cleaned = cleaned.split("(")[0]?.trim() ?? cleaned;
+  }
 
   cleaned = removeAuthorNames(cleaned, authors)
     .replace(AUTHOR_MARKER_PATTERN, " ")
+    .replace(/\([^)]*\)/g, " ")
     .replace(/\b(and|with)\b\s*$/i, "")
     .replace(/[;,/]\s*$/g, "")
     .replace(/\s{2,}/g, " ")
@@ -193,12 +224,24 @@ function cleanInstitutionCandidate(candidate: string, authors: string[]) {
     return "";
   }
 
+  if (looksLikeSentenceFragment(cleaned)) {
+    return "";
+  }
+
   return cleaned;
 }
 
 function hasInstitutionSignal(text: string) {
   const lowered = text.toLowerCase();
-  return INSTITUTION_KEYWORDS.some((keyword) => lowered.includes(keyword)) || looksLikeInstitutionAcronym(text);
+  return (
+    INSTITUTION_KEYWORDS.some((keyword) => {
+      if (/[\u4e00-\u9fff]/.test(keyword)) {
+        return lowered.includes(keyword);
+      }
+
+      return new RegExp(`(^|[^a-z])${escapeRegExp(keyword.toLowerCase())}([^a-z]|$)`, "i").test(lowered);
+    }) || looksLikeInstitutionAcronym(text)
+  );
 }
 
 function rankInstitutionCandidate(text: string) {
@@ -238,6 +281,14 @@ function toPrimaryInstitutionCandidate(candidate: string) {
     .map((segment) => compactText(segment))
     .filter(Boolean);
 
+  const signalIndexes = segments
+    .map((segment, index) => (hasInstitutionSignal(segment) ? index : -1))
+    .filter((index) => index >= 0);
+
+  if (signalIndexes.length === 1 && signalIndexes[0] === 0 && segments.length > 1) {
+    return candidate;
+  }
+
   for (let index = segments.length - 1; index >= 0; index -= 1) {
     if (hasInstitutionSignal(segments[index] ?? "")) {
       return segments[index] ?? candidate;
@@ -273,6 +324,14 @@ function sliceInstitutionFragments(line: string) {
     .filter(Boolean);
 
   return fragments.length > 0 ? fragments : [line];
+}
+
+function hasAffiliationMarker(value: string) {
+  return /^[\d*†‡§¶‖#]/.test(compactText(value));
+}
+
+function isLikelyAffiliationFragment(value: string, lineIndex: number) {
+  return lineIndex < 30 || hasAffiliationMarker(value);
 }
 
 function extractAffiliationMarkers(value: string | null | undefined) {
@@ -375,28 +434,38 @@ function extractAuthorNamesFromText(text: string, fallbackAuthors: string[]) {
 function buildInstitutionMarkerMap(headerLines: string[], authors: string[]) {
   const markerMap = new Map<string, string>();
 
-  for (const line of headerLines) {
+  for (const [lineIndex, line] of headerLines.entries()) {
     if (!hasInstitutionSignal(line)) {
-      continue;
-    }
-
-    const institution = toPrimaryInstitutionCandidate(cleanInstitutionCandidate(line, authors));
-
-    if (!institution || !hasInstitutionSignal(institution)) {
       continue;
     }
 
     const leadingMarkerMatch = compactText(line).match(/^([*†‡§¶‖#\d,\s]+)(?=\S)/);
     const trailingMarkerMatch = compactText(line).match(/([*†‡§¶‖#\d,\s]+)$/);
-    const markers = extractAffiliationMarkers(
-      [leadingMarkerMatch?.[1], trailingMarkerMatch?.[1]]
-        .filter(Boolean)
-        .join(" "),
-    );
 
-    for (const marker of markers) {
-      if (!markerMap.has(marker)) {
-        markerMap.set(marker, institution);
+    for (const fragment of sliceInstitutionFragments(line)) {
+      if (!hasInstitutionSignal(fragment) || !isLikelyAffiliationFragment(fragment, lineIndex)) {
+        continue;
+      }
+
+      const institution = toPrimaryInstitutionCandidate(cleanInstitutionCandidate(fragment, authors));
+
+      if (!institution || !hasInstitutionSignal(institution)) {
+        continue;
+      }
+
+      const markers = extractAffiliationMarkers(
+        [
+          compactText(fragment).match(/^([*†‡§¶‖#\d,\s]+)(?=\S)/)?.[1] ?? leadingMarkerMatch?.[1],
+          compactText(fragment).match(/([*†‡§¶‖#\d,\s]+)$/)?.[1] ?? trailingMarkerMatch?.[1],
+        ]
+          .filter(Boolean)
+          .join(" "),
+      );
+
+      for (const marker of markers) {
+        if (!markerMap.has(marker)) {
+          markerMap.set(marker, institution);
+        }
       }
     }
   }
@@ -439,11 +508,11 @@ export function extractAuthorAffiliationsFromText(text: string, authors: string[
     return [] satisfies AuthorAffiliation[];
   }
 
-  const headerLines = extractHeaderText(text);
-  const headerBlock = headerLines.join("\n");
+  const leadLines = extractLeadLines(text);
+  const leadBlock = leadLines.join("\n");
   const institutionNames = extractInstitutionNamesFromText(text, resolvedAuthors);
-  const institutionMarkerMap = buildInstitutionMarkerMap(headerLines, resolvedAuthors);
-  const authorMarkerMap = buildAuthorMarkerMap(headerBlock, resolvedAuthors);
+  const institutionMarkerMap = buildInstitutionMarkerMap(leadLines, resolvedAuthors);
+  const authorMarkerMap = buildAuthorMarkerMap(leadBlock, resolvedAuthors);
 
   return resolvedAuthors
     .map((author, index) => {
@@ -485,10 +554,12 @@ export function extractPaperDataFromText(text: string, fallbackAuthors: string[]
 }
 
 export function extractInstitutionNamesFromText(text: string, authors: string[]) {
-  const headerLines = extractHeaderText(text);
-  const headerBlock = headerLines.join("\n");
-  const lineCandidates = headerLines.flatMap((line) =>
-    sliceInstitutionFragments(line).filter((fragment) => hasInstitutionSignal(fragment)),
+  const leadLines = extractLeadLines(text);
+  const headerBlock = extractHeaderText(text).join("\n");
+  const lineCandidates = leadLines.flatMap((line, lineIndex) =>
+    sliceInstitutionFragments(line).filter(
+      (fragment) => hasInstitutionSignal(fragment) && isLikelyAffiliationFragment(fragment, lineIndex),
+    ),
   );
   const regexCandidates = findInstitutionRegexMatches(headerBlock);
 
@@ -512,7 +583,7 @@ export async function extractPaperDataFromPdf(pdfUrl: string, fallbackAuthors: s
       "User-Agent": "Event2People/1.0",
       Accept: "application/pdf",
     },
-    next: { revalidate: 60 * 60 * 24 },
+    cache: "no-store",
   });
 
   if (!response.ok) {
@@ -520,8 +591,14 @@ export async function extractPaperDataFromPdf(pdfUrl: string, fallbackAuthors: s
   }
 
   const pdfBytes = new Uint8Array(await response.arrayBuffer());
-  const { getDocument } = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  const loadingTask = getDocument({ data: pdfBytes });
+  const { getDocument, GlobalWorkerOptions } = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const pdfWorkerSrc = pathToFileURL(path.join(process.cwd(), "node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs")).toString();
+  const standardFontDataUrl = pathToFileURL(path.join(process.cwd(), "node_modules/pdfjs-dist/standard_fonts")).toString();
+  GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
+  const loadingTask = getDocument({
+    data: pdfBytes,
+    standardFontDataUrl: standardFontDataUrl.endsWith("/") ? standardFontDataUrl : `${standardFontDataUrl}/`,
+  });
 
   try {
     const doc = await loadingTask.promise;
