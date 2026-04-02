@@ -64,8 +64,24 @@ export type ExtractedPdfPaperData = {
   institutionNamesRaw: string[];
 };
 
+export type AuthorAffiliation = {
+  author: string;
+  institutions: string[];
+};
+
 function compactText(value: string | null | undefined) {
   return value?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+function normalizeInstitutionSignalText(value: string) {
+  return compactText(value)
+    .replace(/^[\d\s,*†‡§¶‖#()\-–—]+/, "")
+    .replace(/[\d\s,*†‡§¶‖#()\-–—]+$/g, "")
+    .trim();
+}
+
+function looksLikeInstitutionAcronym(value: string) {
+  return /^[A-Z]{2,10}(?:\s+[A-Z]{2,10}){0,3}$/.test(normalizeInstitutionSignalText(value));
 }
 
 function uniqueStrings(values: string[]) {
@@ -173,7 +189,7 @@ function cleanInstitutionCandidate(candidate: string, authors: string[]) {
     return "";
   }
 
-  if (cleaned.length < 6 || cleaned.length > 120) {
+  if ((cleaned.length < 6 && !looksLikeInstitutionAcronym(cleaned)) || cleaned.length > 120) {
     return "";
   }
 
@@ -182,7 +198,7 @@ function cleanInstitutionCandidate(candidate: string, authors: string[]) {
 
 function hasInstitutionSignal(text: string) {
   const lowered = text.toLowerCase();
-  return INSTITUTION_KEYWORDS.some((keyword) => lowered.includes(keyword));
+  return INSTITUTION_KEYWORDS.some((keyword) => lowered.includes(keyword)) || looksLikeInstitutionAcronym(text);
 }
 
 function rankInstitutionCandidate(text: string) {
@@ -203,6 +219,10 @@ function rankInstitutionCandidate(text: string) {
 
   if (/\bdepartment\b|学院|school|college/i.test(lowered)) {
     score += 2;
+  }
+
+  if (looksLikeInstitutionAcronym(text)) {
+    score += 3;
   }
 
   if (/,/.test(text) || /，/.test(text)) {
@@ -253,6 +273,14 @@ function sliceInstitutionFragments(line: string) {
     .filter(Boolean);
 
   return fragments.length > 0 ? fragments : [line];
+}
+
+function extractAffiliationMarkers(value: string | null | undefined) {
+  return uniqueStrings(
+    compactText(value)
+      .match(/[*†‡§¶‖#]+|\d+/g)
+      ?.map((marker) => marker.trim()) ?? [],
+  );
 }
 
 function findInstitutionRegexMatches(headerBlock: string) {
@@ -342,6 +370,106 @@ function extractAuthorNamesFromText(text: string, fallbackAuthors: string[]) {
     });
 
   return uniqueStrings(authorCandidates);
+}
+
+function buildInstitutionMarkerMap(headerLines: string[], authors: string[]) {
+  const markerMap = new Map<string, string>();
+
+  for (const line of headerLines) {
+    if (!hasInstitutionSignal(line)) {
+      continue;
+    }
+
+    const institution = toPrimaryInstitutionCandidate(cleanInstitutionCandidate(line, authors));
+
+    if (!institution || !hasInstitutionSignal(institution)) {
+      continue;
+    }
+
+    const leadingMarkerMatch = compactText(line).match(/^([*†‡§¶‖#\d,\s]+)(?=\S)/);
+    const trailingMarkerMatch = compactText(line).match(/([*†‡§¶‖#\d,\s]+)$/);
+    const markers = extractAffiliationMarkers(
+      [leadingMarkerMatch?.[1], trailingMarkerMatch?.[1]]
+        .filter(Boolean)
+        .join(" "),
+    );
+
+    for (const marker of markers) {
+      if (!markerMap.has(marker)) {
+        markerMap.set(marker, institution);
+      }
+    }
+  }
+
+  return markerMap;
+}
+
+function buildAuthorMarkerMap(headerBlock: string, authors: string[]) {
+  const markerMap = new Map<string, string[]>();
+
+  for (const author of authors) {
+    const trailingMatches = [
+      ...headerBlock.matchAll(
+        new RegExp(`${escapeRegExp(author)}\\s*([*†‡§¶‖#\\d]+(?:\\s*,\\s*[*†‡§¶‖#\\d]+)*)`, "gi"),
+      ),
+    ];
+    const leadingMatches = [
+      ...headerBlock.matchAll(
+        new RegExp(`(?:^|[,;\\n])\\s*([*†‡§¶‖#\\d]+(?:\\s*,\\s*[*†‡§¶‖#\\d]+)*)\\s*${escapeRegExp(author)}`, "gi"),
+      ),
+    ];
+    const markers = extractAffiliationMarkers(
+      [...trailingMatches.map((match) => match[1]), ...leadingMatches.map((match) => match[1])]
+        .filter(Boolean)
+        .join(" "),
+    );
+
+    if (markers.length > 0) {
+      markerMap.set(author, markers);
+    }
+  }
+
+  return markerMap;
+}
+
+export function extractAuthorAffiliationsFromText(text: string, authors: string[], maxAuthors = 3) {
+  const resolvedAuthors = uniqueStrings(authors).slice(0, maxAuthors);
+
+  if (resolvedAuthors.length === 0) {
+    return [] satisfies AuthorAffiliation[];
+  }
+
+  const headerLines = extractHeaderText(text);
+  const headerBlock = headerLines.join("\n");
+  const institutionNames = extractInstitutionNamesFromText(text, resolvedAuthors);
+  const institutionMarkerMap = buildInstitutionMarkerMap(headerLines, resolvedAuthors);
+  const authorMarkerMap = buildAuthorMarkerMap(headerBlock, resolvedAuthors);
+
+  return resolvedAuthors
+    .map((author, index) => {
+      const institutionsFromMarkers = uniqueStrings(
+        (authorMarkerMap.get(author) ?? []).map((marker) => institutionMarkerMap.get(marker) ?? ""),
+      );
+
+      if (institutionsFromMarkers.length > 0) {
+        return {
+          author,
+          institutions: institutionsFromMarkers,
+        } satisfies AuthorAffiliation;
+      }
+
+      const fallbackInstitution = institutionNames[index] ?? institutionNames[0] ?? "";
+
+      if (!fallbackInstitution) {
+        return null;
+      }
+
+      return {
+        author,
+        institutions: [fallbackInstitution],
+      } satisfies AuthorAffiliation;
+    })
+    .filter((value): value is AuthorAffiliation => Boolean(value));
 }
 
 export function extractPaperDataFromText(text: string, fallbackAuthors: string[]) {

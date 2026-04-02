@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { extractInstitutionNamesFromText, extractPaperDataFromText } from "@/lib/pdf-paper-institutions";
+import {
+  extractAuthorAffiliationsFromText,
+  extractInstitutionNamesFromText,
+  extractPaperDataFromText,
+} from "@/lib/pdf-paper-institutions";
 
 describe("pdf paper institution extraction", () => {
   it("extracts institution names from a typical author block", () => {
@@ -61,5 +65,32 @@ Additional analysis.
     expect(parsed.authors).toEqual(["Jian Wu", "Sofia Garcia"]);
     expect(parsed.emails).toEqual(["jian@example.edu", "sofia@example.edu"]);
     expect(parsed.institutionNamesRaw).toEqual(["Tsinghua University", "Shanghai AI Laboratory"]);
+  });
+
+  it("maps leading authors to their institutions from header markers", () => {
+    const text = `
+Embodied Planning Kernel
+Jian Wu1, Sofia Garcia2, Alice Chen1
+1 Department of Automation, Tsinghua University
+2 Shanghai AI Laboratory
+
+Abstract
+This paper studies embodied planning.
+`;
+
+    expect(extractAuthorAffiliationsFromText(text, ["Jian Wu", "Sofia Garcia", "Alice Chen"])).toEqual([
+      {
+        author: "Jian Wu",
+        institutions: ["Tsinghua University"],
+      },
+      {
+        author: "Sofia Garcia",
+        institutions: ["Shanghai AI Laboratory"],
+      },
+      {
+        author: "Alice Chen",
+        institutions: ["Tsinghua University"],
+      },
+    ]);
   });
 });

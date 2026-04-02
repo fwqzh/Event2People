@@ -1185,7 +1185,7 @@ export function EventBoard({
                 Boolean(detail) &&
                 (detail.analysisReferences?.length ?? 0) === 0 &&
                 analysisStatus === "ready";
-              const primaryDetailPanelTitle = event.sourceType === "github" ? "项目信号" : detail?.sourceSummaryLabel ?? "论文简介";
+              const primaryDetailPanelTitle = event.sourceType === "github" ? "项目信号" : detail?.sourceSummaryLabel ?? "论文概览";
               const primaryDetailPanelClassName = event.sourceType === "arxiv" ? "detail-panel detail-panel--wide" : "detail-panel";
               const people =
                 detail?.people
@@ -1392,6 +1392,73 @@ export function EventBoard({
                                     </article>
                                   </div>
                                 ) : null}
+                                {event.sourceType === "arxiv" && analysisParagraphs.length > 0 ? (
+                                  <div className="detail-analysis-copy">
+                                    <h5>详细解读</h5>
+                                    {analysisParagraphs.map((paragraph, index) => (
+                                      <p key={`${event.stableId}-analysis-${index}`}>{paragraph}</p>
+                                    ))}
+                                    {detail.analysisReferences && detail.analysisReferences.length > 0 ? (
+                                      <div className="detail-analysis-references">
+                                        <h6>引用来源</h6>
+                                        <div className="link-list link-list--stacked">
+                                          {detail.analysisReferences.map((reference, index) => (
+                                            <p
+                                              key={`${event.stableId}-analysis-reference-${reference.url}`}
+                                              className="link-list__text"
+                                            >
+                                              <span>[{index + 1}] {reference.label}：</span>
+                                              <Link href={reference.url} target="_blank" rel="noreferrer">
+                                                {reference.title}
+                                              </Link>
+                                            </p>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                ) : null}
+                                {showArxivAnalysisLoading ? (
+                                  <div className="detail-analysis-copy" aria-live="polite">
+                                    <h5>详细解读</h5>
+                                    <div className="detail-panel__loading-row">
+                                      <span
+                                        className="detail-loading-panel__spinner detail-loading-panel__spinner--inline"
+                                        aria-hidden="true"
+                                      />
+                                      <p className="detail-panel__subcopy">
+                                        正在补充中文互联网来源和 AI 解读，不影响你先看论文基础信息。
+                                      </p>
+                                    </div>
+                                  </div>
+                                ) : null}
+                                {showArxivAnalysisError ? (
+                                  <div className="detail-analysis-copy">
+                                    <h5>详细解读</h5>
+                                    <p className="detail-panel__subcopy">{analysisError ?? "中文互联网来源暂时加载失败"}</p>
+                                    <button
+                                      type="button"
+                                      className="text-action-button"
+                                      onClick={(clickEvent) => {
+                                        clickEvent.stopPropagation();
+                                        setDetailReloadTokenById((current) => ({
+                                          ...current,
+                                          [event.stableId]: (current[event.stableId] ?? 0) + 1,
+                                        }));
+                                      }}
+                                    >
+                                      重试解读
+                                    </button>
+                                  </div>
+                                ) : null}
+                                {showArxivAnalysisFallbackNote ? (
+                                  <div className="detail-analysis-copy">
+                                    <h5>详细解读</h5>
+                                    <p className="detail-panel__subcopy">
+                                      暂未抓到稳定的中文互联网来源，当前解读先基于论文标题和摘要生成。
+                                    </p>
+                                  </div>
+                                ) : null}
                                 {showPaperMetadata ? (
                                   <div className="paper-metadata-grid">
                                     <article className="paper-metadata-item">
@@ -1415,11 +1482,18 @@ export function EventBoard({
                                       </p>
                                     </article>
                                     <article className="paper-metadata-item">
-                                      <strong>作者主要机构</strong>
+                                      <strong>主要作者单位</strong>
                                       <p>
-                                        {detail.paperMetadata!.institutions.length > 0
-                                          ? detail.paperMetadata!.institutions.join(" / ")
-                                          : "暂未识别到主要机构"}
+                                        {detail.paperMetadata!.leadAuthorAffiliations.length > 0
+                                          ? detail.paperMetadata!.leadAuthorAffiliations
+                                              .map(
+                                                (item) =>
+                                                  `${item.author}：${item.institutions.join(" / ")}`,
+                                              )
+                                              .join("；")
+                                          : detail.paperMetadata!.institutions.length > 0
+                                            ? detail.paperMetadata!.institutions.join(" / ")
+                                            : "暂未识别到主要作者单位"}
                                       </p>
                                     </article>
                                     <article className="paper-metadata-item">
@@ -1436,58 +1510,6 @@ export function EventBoard({
                                     </article>
                                   </div>
                                 ) : null}
-                                {event.sourceType === "arxiv" && detail.analysisReferences && detail.analysisReferences.length > 0 ? (
-                                  <div className="detail-analysis-references">
-                                    <h6>数据源</h6>
-                                    <div className="link-list link-list--stacked">
-                                      {detail.analysisReferences.map((reference, index) => (
-                                        <p
-                                          key={`${event.stableId}-paper-reference-${reference.url}`}
-                                          className="link-list__text"
-                                        >
-                                          <span>[{index + 1}] {reference.label}：</span>
-                                          <Link href={reference.url} target="_blank" rel="noreferrer">
-                                            {reference.title}
-                                          </Link>
-                                        </p>
-                                      ))}
-                                    </div>
-                                  </div>
-                                ) : null}
-                                {showArxivAnalysisLoading ? (
-                                  <div className="detail-panel__loading-row" aria-live="polite">
-                                    <span
-                                      className="detail-loading-panel__spinner detail-loading-panel__spinner--inline"
-                                      aria-hidden="true"
-                                    />
-                                    <p className="detail-panel__subcopy">
-                                      正在补充中文互联网来源和 AI 解读，不影响你先看论文基础信息。
-                                    </p>
-                                  </div>
-                                ) : null}
-                                {showArxivAnalysisError ? (
-                                  <>
-                                    <p className="detail-panel__subcopy">{analysisError ?? "中文互联网来源暂时加载失败"}</p>
-                                    <button
-                                      type="button"
-                                      className="text-action-button"
-                                      onClick={(clickEvent) => {
-                                        clickEvent.stopPropagation();
-                                        setDetailReloadTokenById((current) => ({
-                                          ...current,
-                                          [event.stableId]: (current[event.stableId] ?? 0) + 1,
-                                        }));
-                                      }}
-                                    >
-                                      重试解读
-                                    </button>
-                                  </>
-                                ) : null}
-                                {showArxivAnalysisFallbackNote ? (
-                                  <p className="detail-panel__subcopy">
-                                    暂未抓到稳定的中文互联网来源，当前解读先基于论文标题和摘要生成。
-                                  </p>
-                                ) : null}
                                 {showEventLens ? <p className="detail-panel__subcopy">事件判断：{event.eventHighlightZh}</p> : null}
                                 <div className="metric-column">
                                   {event.metrics.map((metric) => (
@@ -1499,7 +1521,7 @@ export function EventBoard({
                                 </div>
                               </section>
 
-                              {analysisParagraphs.length > 0 ? (
+                              {event.sourceType !== "arxiv" && analysisParagraphs.length > 0 ? (
                                 <section className="detail-panel detail-panel--wide detail-panel--analysis">
                                   <h5>详细解读</h5>
                                   <div className="detail-analysis-copy">
@@ -1509,7 +1531,7 @@ export function EventBoard({
                                   </div>
                                   {detail.analysisReferences && detail.analysisReferences.length > 0 ? (
                                     <div className="detail-analysis-references">
-                                      <h6>中文互联网引用</h6>
+                                      <h6>引用来源</h6>
                                       <div className="link-list link-list--stacked">
                                         {detail.analysisReferences.map((reference, index) => (
                                           <p

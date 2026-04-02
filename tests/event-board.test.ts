@@ -501,7 +501,7 @@ describe("EventBoard", () => {
             createResponse(
               createDetail({
                 stableId: "event:arxiv:planning-kernel",
-                sourceSummaryLabel: "论文解读",
+                sourceSummaryLabel: "论文概览",
                 introSummary: "planning kernel detail",
                 people: [],
               }),
@@ -514,7 +514,7 @@ describe("EventBoard", () => {
             createResponse(
               createDetail({
                 stableId: "event:arxiv:policy-stack",
-                sourceSummaryLabel: "论文解读",
+                sourceSummaryLabel: "论文概览",
                 introSummary: "policy stack detail",
                 people: [],
               }),
@@ -581,7 +581,7 @@ describe("EventBoard", () => {
       createResponse(
         createDetail({
           stableId: "event:arxiv:planning-kernel",
-          sourceSummaryLabel: "论文解读",
+          sourceSummaryLabel: "论文概览",
           introSummary: "planning kernel detail",
           people: [],
         }),
@@ -610,6 +610,8 @@ describe("EventBoard", () => {
           return Promise.resolve(
             createAnalysisResponse({
               stableId: "event:arxiv:planning-kernel",
+              analysisSummary:
+                "这篇论文把复杂任务规划拆成更稳定的决策单元，重点不是泛泛讨论 agent 规划，而是把长链任务里的关键判断点做成可组合模块。[1]\n\n中文来源普遍把它理解成一种更利于工程复用的规划底座，这也是它比单次任务优化更值得跟进的地方。[2]",
               paperExplanation: {
                 lead: "这篇论文聚焦复杂任务规划，重点是把长链路决策拆成可组合的基础模块。",
                 problem:
@@ -639,7 +641,7 @@ describe("EventBoard", () => {
           createResponse(
             createDetail({
               stableId: "event:arxiv:planning-kernel",
-              sourceSummaryLabel: "论文解读",
+              sourceSummaryLabel: "论文概览",
               detailSummary: "这篇论文聚焦复杂任务规划，重点是把长链路决策拆成可组合的基础模块。",
               introSummary: "这篇论文聚焦复杂任务规划，重点是把长链路决策拆成可组合的基础模块。",
               paperExplanation: {
@@ -653,6 +655,10 @@ describe("EventBoard", () => {
                 authors: ["Jian Wu", "Sofia Garcia"],
                 authorEmails: ["jian@tsinghua.edu.cn", "sofia@mit.edu"],
                 institutions: ["Tsinghua University", "Shanghai AI Lab"],
+                leadAuthorAffiliations: [
+                  { author: "Jian Wu", institutions: ["Tsinghua University"] },
+                  { author: "Sofia Garcia", institutions: ["Shanghai AI Lab"] },
+                ],
                 topic: "复杂任务规划",
                 keywords: ["复杂任务规划", "规划内核与决策原语", "具身智能任务"],
               },
@@ -693,6 +699,14 @@ describe("EventBoard", () => {
     expect(await screen.findByText("论文解决了什么问题")).toBeInTheDocument();
     expect(screen.getByText("用了什么方法")).toBeInTheDocument();
     expect(screen.getByText("核心贡献是什么")).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        "这篇论文把复杂任务规划拆成更稳定的决策单元，重点不是泛泛讨论 agent 规划，而是把长链任务里的关键判断点做成可组合模块。[1]",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "详细解读", level: 5 }).compareDocumentPosition(screen.getByText("论文发表时间")),
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(screen.getByText("ArXiv 网页：")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "https://arxiv.org/abs/2503.01022" })).toBeInTheDocument();
     expect(screen.getByText("论文发表时间")).toBeInTheDocument();
@@ -701,18 +715,13 @@ describe("EventBoard", () => {
     expect(screen.getByText("Jian Wu / Sofia Garcia")).toBeInTheDocument();
     expect(screen.getByText("作者邮箱")).toBeInTheDocument();
     expect(screen.getByText("jian@tsinghua.edu.cn / sofia@mit.edu")).toBeInTheDocument();
-    expect(screen.getByText("作者主要机构")).toBeInTheDocument();
-    expect(screen.getByText("Tsinghua University / Shanghai AI Lab")).toBeInTheDocument();
+    expect(screen.getByText("主要作者单位")).toBeInTheDocument();
+    expect(screen.getByText("Jian Wu：Tsinghua University；Sofia Garcia：Shanghai AI Lab")).toBeInTheDocument();
     expect(screen.getByText("论文主题")).toBeInTheDocument();
     expect(screen.getAllByText("复杂任务规划").length).toBeGreaterThan(0);
     expect(screen.getByText("论文关键词")).toBeInTheDocument();
     expect(screen.getByText("复杂任务规划 / 规划内核与决策原语 / 具身智能任务")).toBeInTheDocument();
     expect(screen.getAllByText("这篇论文聚焦复杂任务规划，重点是把长链路决策拆成可组合的基础模块。")).toHaveLength(1);
-    expect(
-      screen.getByText(
-        "这篇论文想解决的是复杂任务规划场景里决策链路长、步骤容易失稳的问题，中文解读普遍把它归到“把长任务拆成更稳定规划单元”的方向。[1]",
-      ),
-    ).toBeInTheDocument();
     expect(
       screen.getByText(
         "方法上，它提出了一套规划内核与决策原语，把任务拆成更清晰的决策步骤，并通过模块化接口把推理和执行重新接起来。[1] [2]",
@@ -723,7 +732,12 @@ describe("EventBoard", () => {
         "核心贡献是把规划问题沉淀成更通用的基础模块，既方便横向复用，也降低了后续工程侧继续接入的门槛。[2]",
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText("数据源")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "中文来源普遍把它理解成一种更利于工程复用的规划底座，这也是它比单次任务优化更值得跟进的地方。[2]",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("引用来源")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Embodied Planning Kernel 论文解读" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Planning Kernel: 把长链规划拆成基础模块" })).toBeInTheDocument();
   });
@@ -872,6 +886,8 @@ describe("EventBoard", () => {
   });
 
   it("hydrates arxiv filters from the URL and keeps them disabled elsewhere", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-28T12:00:00.000Z"));
     mockPathname = "/arxiv";
     mockSearchParams = new URLSearchParams("time=7d&categories=agent&q=bot");
 
@@ -921,11 +937,10 @@ describe("EventBoard", () => {
     expect(screen.getByText("1 / 2 篇匹配")).toBeInTheDocument();
     expect(screen.getByText("Agent Bot Stack")).toBeInTheDocument();
     expect(screen.queryByText("Robot Control")).not.toBeInTheDocument();
-    await waitFor(() => {
-      expect(String(routerReplaceMock.mock.lastCall?.[0])).toContain("time=7d");
-      expect(String(routerReplaceMock.mock.lastCall?.[0])).toContain("categories=agent");
-      expect(String(routerReplaceMock.mock.lastCall?.[0])).not.toContain("q=");
-    });
+    await vi.runOnlyPendingTimersAsync();
+    expect(String(routerReplaceMock.mock.lastCall?.[0])).toContain("time=7d");
+    expect(String(routerReplaceMock.mock.lastCall?.[0])).toContain("categories=agent");
+    expect(String(routerReplaceMock.mock.lastCall?.[0])).not.toContain("q=");
 
     mockPathname = "/github";
     mockSearchParams = new URLSearchParams("time=7d&q=bot");

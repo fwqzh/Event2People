@@ -8,7 +8,9 @@ import type { EventTag, ReferenceItem } from "@/lib/types";
 
 const ANALYSIS_CACHE_TTL_MS = 30 * 60_000;
 const ANALYSIS_TIMEOUT_MS = 24_000;
-const FIELD_LENGTH_LIMIT = 220;
+const EXPLANATION_FIELD_LENGTH_LIMIT = 320;
+const ANALYSIS_PARAGRAPH_LENGTH_LIMIT = 420;
+const ANALYSIS_SUMMARY_LENGTH_LIMIT = 1_600;
 
 type PaperAnalysisInput = {
   stableId: string;
@@ -116,7 +118,27 @@ function normalizeExplanationField(value: string | null | undefined) {
     return "";
   }
 
-  return clampPlainText(normalized, FIELD_LENGTH_LIMIT);
+  return clampPlainText(normalized, EXPLANATION_FIELD_LENGTH_LIMIT);
+}
+
+function normalizeAnalysisParagraph(value: string | null | undefined) {
+  const normalized = compactText(value);
+
+  if (!normalized) {
+    return "";
+  }
+
+  return clampPlainText(normalized, ANALYSIS_PARAGRAPH_LENGTH_LIMIT);
+}
+
+function clampMultilineText(value: string, limit: number) {
+  const normalized = value.trim();
+
+  if (normalized.length <= limit) {
+    return normalized;
+  }
+
+  return normalized.slice(0, limit).trimEnd();
 }
 
 function isSectionHeading(line: string) {
@@ -176,6 +198,21 @@ function buildPaperPdfContext(pdfTextRaw: string | null | undefined) {
   };
 }
 
+function buildPaperPdfReferenceContent(pdfContext: ReturnType<typeof buildPaperPdfContext>) {
+  return clampPlainText(
+    [
+      pdfContext.abstract && `Abstract: ${pdfContext.abstract}`,
+      pdfContext.introduction && `Introduction: ${pdfContext.introduction}`,
+      pdfContext.method && `Method: ${pdfContext.method}`,
+      pdfContext.evaluation && `Evaluation: ${pdfContext.evaluation}`,
+      pdfContext.conclusion && `Conclusion: ${pdfContext.conclusion}`,
+    ]
+      .filter(Boolean)
+      .join(" "),
+    4_000,
+  );
+}
+
 function appendReferenceTags(sentence: string, references: ReferenceItem[], preferredIndexes: number[]) {
   const tags = preferredIndexes
     .filter((index) => references[index])
@@ -229,6 +266,36 @@ function normalizePaperExplanation(
   } satisfies PaperExplanationView;
 }
 
+function normalizeAnalysisSummary(
+  value:
+    | {
+        analysisParagraphsZh?: string[];
+        analysisSummaryZh?: string;
+      }
+    | null
+    | undefined,
+  explanation: PaperExplanationView,
+) {
+  const paragraphsFromArray = Array.isArray(value?.analysisParagraphsZh) ? value.analysisParagraphsZh : [];
+  const paragraphsFromString =
+    typeof value?.analysisSummaryZh === "string" ? value.analysisSummaryZh.split(/\n{2,}/) : [];
+  const normalizedParagraphs = [...paragraphsFromArray, ...paragraphsFromString]
+    .map((paragraph) => normalizeAnalysisParagraph(paragraph))
+    .filter(Boolean);
+
+  if (normalizedParagraphs.length === 0) {
+    return clampMultilineText(
+      [explanation.problem, explanation.method, explanation.contribution].filter(Boolean).join("\n\n"),
+      ANALYSIS_SUMMARY_LENGTH_LIMIT,
+    );
+  }
+
+  return clampMultilineText(
+    [...new Set(normalizedParagraphs)].slice(0, 4).join("\n\n"),
+    ANALYSIS_SUMMARY_LENGTH_LIMIT,
+  );
+}
+
 export async function generatePaperAnalysis(input: PaperAnalysisInput): Promise<PaperAnalysisResult> {
   const cacheKey = `${input.stableId}:${input.paper.paperTitle}`;
   const cached = analysisCache.get(cacheKey);
@@ -256,7 +323,7 @@ export async function generatePaperAnalysis(input: PaperAnalysisInput): Promise<
   const pdfContext = buildPaperPdfContext(input.paper.pdfTextRaw);
   const fallbackExplanation = buildFallbackPaperExplanation(input, analysisReferences);
 
-  if (!hasOpenAiKey || referencesRaw.length === 0) {
+  if (!hasOpenAiKey) {
     const fallbackResult = {
       paperExplanation: fallbackExplanation,
       analysisSummary: null,
@@ -278,21 +345,40 @@ export async function generatePaperAnalysis(input: PaperAnalysisInput): Promise<
   }
 
   try {
+    const promptReferences = [
+      {
+        id: 1,
+        source: "Paper PDF",
+        title: `${input.paper.paperTitle} PDF`,
+        url: toPaperPdfUrl(input.paper.paperUrl),
+        content: buildPaperPdfReferenceContent(pdfContext),
+      },
+      ...referencesRaw.map((reference, index) => ({
+        id: index + 2,
+        source: reference.label,
+        title: reference.title,
+        url: reference.url,
+        content: compactText(reference.content),
+      })),
+    ];
     const completion = await client.chat.completions.create(
       {
         model: env.openAiModel,
-        temperature: 0.2,
-        max_completion_tokens: 800,
+        temperature: 0.15,
+        max_completion_tokens: 1_300,
         messages: [
           {
             role: "system",
             content: [
               "你是 Frontier Event-to-People 的中文研究编辑，负责整理 arXiv 论文卡片。",
-              "先以论文 PDF 全文提取出的章节内容为主，再参考中文互联网对论文的介绍做辅助核对，输出清晰易读的三段式中文解读。",
-              '输出必须是 JSON，格式为 {"problemZh":"...","methodZh":"...","contributionZh":"..."}。',
+              "这是一篇一篇单独生成的论文解读，不允许套用固定模板句式，不允许泛泛而谈。",
+              "先以 [1] 这条 Paper PDF 为主，逐段理解论文问题、方法、实验和结论；如果提供了中文互联网来源，再把这些来源作为补充视角交叉核对。",
+              "必须尽量写出该论文自己的方法名、任务对象、实验场景、模块拆分或结论要点；如果拿不到细节，就少写，不要用空洞套话补齐。",
+              '输出必须是 JSON，格式为 {"problemZh":"...","methodZh":"...","contributionZh":"...","analysisParagraphsZh":["...","...","..."]}。',
               "problemZh 只解释论文解决了什么问题；methodZh 只解释用了什么方法；contributionZh 只解释核心贡献是什么。",
-              "每个字段写 1-2 句中文，避免空话和投资判断。",
-              "优先使用 [1] 这条 Paper PDF 作为主引用；中文互联网来源只能做补充解释。",
+              "problemZh / methodZh / contributionZh 各写 2-3 句中文，强调论文自身细节，避免空话、投资判断和模板化评价。",
+              "analysisParagraphsZh 写 3-4 段，每段 2-4 句，分别覆盖研究背景与问题、方法与关键机制、实验结论与局限/后续价值。",
+              "如果用了中文互联网来源，不要只说“有媒体提到”，而要把这些来源强调的具体角度融进表述里。",
               "只允许引用提供的 references，并在句内用 [1] [2] [3] 这样的编号。",
               "不要引用未提供的编号，不要编造来源，不要输出 Markdown 代码块。",
             ].join("\n"),
@@ -309,18 +395,12 @@ export async function generatePaperAnalysis(input: PaperAnalysisInput): Promise<
                 paper: {
                   title: input.paper.paperTitle,
                   url: input.paper.paperUrl,
-                  authors: input.paper.authors.slice(0, 4),
+                  authors: input.paper.authors.slice(0, 6),
                   abstractRaw: compactText(input.paper.abstractRaw),
                   pdfContext,
                   hasCode: Boolean(input.paper.codeUrl || (input.relatedRepoCount ?? 0) > 0),
                 },
-                references: referencesRaw.map((reference, index) => ({
-                  id: index + 1,
-                  source: reference.label,
-                  title: reference.title,
-                  url: reference.url,
-                  content: compactText(reference.content),
-                })),
+                references: promptReferences,
               },
               null,
               2,
@@ -339,10 +419,13 @@ export async function generatePaperAnalysis(input: PaperAnalysisInput): Promise<
       problemZh?: string;
       methodZh?: string;
       contributionZh?: string;
+      analysisParagraphsZh?: string[];
+      analysisSummaryZh?: string;
     };
+    const paperExplanation = normalizePaperExplanation(payload, fallbackExplanation);
     const result = {
-      paperExplanation: normalizePaperExplanation(payload, fallbackExplanation),
-      analysisSummary: null,
+      paperExplanation,
+      analysisSummary: normalizeAnalysisSummary(payload, paperExplanation),
       analysisReferences,
     };
 

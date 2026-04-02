@@ -12,6 +12,7 @@ import { readStringArray } from "@/lib/json";
 import { generatePaperAnalysis } from "@/lib/paper-analysis";
 import { buildPaperExplanationZh, buildPaperTopicView } from "@/lib/paper-copy";
 import { buildPersonLinks } from "@/lib/person-links";
+import { resolvePaperRuntimeMetadata } from "@/lib/paper-runtime";
 import { prisma } from "@/lib/prisma";
 import { ensureActiveDataset, parseLinks, parseMetrics } from "@/lib/seed";
 import { clampPlainText, compactInstitution, formatDay, timeAgo } from "@/lib/text";
@@ -214,7 +215,7 @@ function uniqueCopyParts(values: Array<string | null | undefined>) {
 }
 
 function getSourceSummaryLabel(sourceType: "github" | "arxiv") {
-  return sourceType === "github" ? "项目简介" : "论文解读";
+  return sourceType === "github" ? "项目简介" : "论文概览";
 }
 
 function buildSourceSummary(
@@ -298,7 +299,7 @@ function buildArxivSummaryMetadata(
   };
 }
 
-function buildArxivMetadata(
+async function buildArxivMetadata(
   event: Pick<ActiveEventRecord, "eventTag">,
   paper: PaperRecord | undefined,
   people: ActiveEventRecord["personLinks"],
@@ -311,20 +312,27 @@ function buildArxivMetadata(
       authors: [],
       authorEmails: [],
       institutions: [],
+      leadAuthorAffiliations: [],
     };
   }
 
-  const authors = [...new Set(readStringArray(paper.authorsJson))];
-  const authorEmails = [...new Set(readStringArray(paper.authorEmailsRaw))];
-  const institutionsFromPaper = readStringArray(paper.institutionNamesRaw).map((value) => compactInstitution(value));
+  const runtimeMetadata = await resolvePaperRuntimeMetadata({
+    cacheKey: paper.stableId,
+    paperUrl: paper.paperUrl,
+    authors: readStringArray(paper.authorsJson),
+    authorEmails: readStringArray(paper.authorEmailsRaw),
+    institutionNames: readStringArray(paper.institutionNamesRaw),
+    pdfTextRaw: paper.pdfTextRaw,
+  });
   const institutionsFromPeople = people.map((link) => getPersonPrimaryInstitution(link.person)).filter(Boolean);
-  const institutions = institutionsFromPaper.length > 0 ? institutionsFromPaper : institutionsFromPeople;
+  const institutions = runtimeMetadata.institutionNames.length > 0 ? runtimeMetadata.institutionNames : institutionsFromPeople;
 
   return {
     ...summaryMetadata,
-    authors,
-    authorEmails,
+    authors: runtimeMetadata.authors,
+    authorEmails: runtimeMetadata.authorEmails,
     institutions: [...new Set(institutions)].slice(0, 3),
+    leadAuthorAffiliations: runtimeMetadata.leadAuthorAffiliations,
   };
 }
 
@@ -466,13 +474,13 @@ function mapEventSummary(
   };
 }
 
-function mapEventDetail(
+async function mapEventDetail(
   event: ActiveEventRecord,
-): EventDetailView {
+): Promise<EventDetailView> {
   const projects = event.projectLinks.map((link) => link.project);
   const papers = event.paperLinks.map((link) => link.paper);
   const arxivNarrative = event.sourceType === "arxiv" ? buildArxivNarrative(event, papers[0]) : null;
-  const arxivMetadata = event.sourceType === "arxiv" ? buildArxivMetadata(event, papers[0], event.personLinks) : null;
+  const arxivMetadata = event.sourceType === "arxiv" ? await buildArxivMetadata(event, papers[0], event.personLinks) : null;
   const safeHighlight =
     event.sourceType === "github"
       ? normalizeGitHubHighlight(event.eventHighlightZh, projects[0], event.eventTag as EventSummaryView["eventTag"])
@@ -669,7 +677,7 @@ export async function getActiveEventByStableId(stableId: string) {
 
 export async function getActiveEventDetailByStableId(stableId: string) {
   const event = await getActiveEventByStableId(stableId);
-  return event ? mapEventDetail(event) : null;
+  return event ? await mapEventDetail(event) : null;
 }
 
 export async function getActiveEventAnalysisByStableId(stableId: string): Promise<EventAnalysisView | null> {
@@ -686,7 +694,7 @@ export async function getActiveEventAnalysisByStableId(stableId: string): Promis
       return null;
     }
 
-    const detail = mapEventDetail(event);
+    const detail = await mapEventDetail(event);
     const analysis = await generateGitHubProjectAnalysis({
       stableId: event.stableId,
       eventTitleZh: event.eventTitleZh,
@@ -721,6 +729,15 @@ export async function getActiveEventAnalysisByStableId(stableId: string): Promis
       return null;
     }
 
+    const runtimeMetadata = await resolvePaperRuntimeMetadata({
+      cacheKey: paper.stableId,
+      paperUrl: paper.paperUrl,
+      authors: readStringArray(paper.authorsJson),
+      authorEmails: readStringArray(paper.authorEmailsRaw),
+      institutionNames: readStringArray(paper.institutionNamesRaw),
+      pdfTextRaw: paper.pdfTextRaw,
+    });
+
     const analysis = await generatePaperAnalysis({
       stableId: event.stableId,
       eventTitleZh: event.eventTitleZh,
@@ -730,9 +747,9 @@ export async function getActiveEventAnalysisByStableId(stableId: string): Promis
       paper: {
         paperTitle: paper.paperTitle,
         paperUrl: paper.paperUrl,
-        authors: readStringArray(paper.authorsJson),
+        authors: runtimeMetadata.authors,
         abstractRaw: paper.abstractRaw,
-        pdfTextRaw: paper.pdfTextRaw,
+        pdfTextRaw: runtimeMetadata.pdfTextRaw,
         codeUrl: paper.codeUrl,
       },
     });

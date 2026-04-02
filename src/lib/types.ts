@@ -189,6 +189,10 @@ export type EventDetailView = {
     authors: string[];
     authorEmails: string[];
     institutions: string[];
+    leadAuthorAffiliations: Array<{
+      author: string;
+      institutions: string[];
+    }>;
     keywords: string[];
     topic: string;
   } | null;

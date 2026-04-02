@@ -210,8 +210,8 @@ async function searchWithTavily(query: string, exactMatch: boolean) {
         topic: "general",
         country: "china",
         search_depth: "basic",
-        max_results: 5,
-        include_raw_content: false,
+        max_results: 8,
+        include_raw_content: true,
         include_answer: false,
         exclude_domains: EXCLUDED_SOURCE_DOMAINS,
         exact_match: exactMatch,
@@ -230,10 +230,10 @@ async function searchWithTavily(query: string, exactMatch: boolean) {
     }
 
     return payload.results
-      .map((result: { title?: string; url?: string; content?: string }) => ({
+      .map((result: { title?: string; url?: string; content?: string; raw_content?: string }) => ({
         title: compactText(result.title),
         url: normalizeUrl(result.url),
-        content: compactText(result.content),
+        content: compactText(result.raw_content ?? result.content),
       }))
       .filter((result: TavilySearchResult) => result.url && (result.title || result.content));
   } catch {
@@ -242,20 +242,25 @@ async function searchWithTavily(query: string, exactMatch: boolean) {
 }
 
 export async function fetchPaperChineseReferences(input: PaperSearchInput) {
-  const primaryResults = await searchWithTavily(buildPrimaryQuery(input), true);
-  let fallbackResults: TavilySearchResult[] = [];
+  const collectedResults = [...(await searchWithTavily(buildPrimaryQuery(input), true))];
 
-  if (primaryResults.length === 0) {
+  if (collectedResults.length < 2) {
     for (const query of buildFallbackQueries(input)) {
-      fallbackResults = await searchWithTavily(query, false);
+      const fallbackResults = await searchWithTavily(query, false);
 
-      if (fallbackResults.length > 0) {
+      for (const result of fallbackResults) {
+        if (!collectedResults.some((candidate) => candidate.url === result.url)) {
+          collectedResults.push(result);
+        }
+      }
+
+      if (collectedResults.length >= 4) {
         break;
       }
     }
   }
 
-  const rankedResults = [...primaryResults, ...fallbackResults]
+  const rankedResults = collectedResults
     .map((result) => ({
       ...result,
       score: scoreResult(result, input),
