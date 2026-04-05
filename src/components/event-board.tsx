@@ -1709,7 +1709,7 @@ export function EventBoard({
                                             <div className="link-list link-list--stacked">
                                               {paperInstitutionText ? (
                                                 <p className="link-list__text">
-                                                  <span>论文单位：</span>
+                                                  <span>作者单位：</span>
                                                   <span>{paperInstitutionText}</span>
                                                 </p>
                                               ) : null}

@@ -819,7 +819,7 @@ describe("EventBoard", () => {
 
     await user.click(screen.getByRole("button", { name: "展开 Embodied Planning Kernel" }));
 
-    expect(await screen.findByText("论文单位：")).toBeInTheDocument();
+    expect(await screen.findByText("作者单位：")).toBeInTheDocument();
     expect(screen.queryByText("是当前论文作者")).not.toBeInTheDocument();
     expect(screen.getByText("论文联系方式：")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "jian@tsinghua.edu.cn" })).toHaveAttribute("href", "mailto:jian@tsinghua.edu.cn");
