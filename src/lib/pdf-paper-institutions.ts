@@ -73,6 +73,12 @@ export type AuthorAffiliation = {
   institutions: string[];
 };
 
+export type AuthorContactProfile = {
+  author: string;
+  institutions: string[];
+  emails: string[];
+};
+
 function compactText(value: string | null | undefined) {
   return value?.replace(/\s+/g, " ").trim() ?? "";
 }
@@ -370,6 +376,142 @@ function extractEmailsFromText(text: string) {
   return uniqueStrings([...groupedEmails, ...simpleEmails]);
 }
 
+function normalizeEmailLocalPart(value: string | null | undefined) {
+  return compactText(value)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function getAuthorNameTokens(author: string) {
+  return compactText(author)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+function scoreEmailAuthorMatch(localPart: string, author: string) {
+  const normalizedLocalPart = normalizeEmailLocalPart(localPart);
+  const tokens = getAuthorNameTokens(author);
+  const first = tokens[0] ?? "";
+  const last = tokens.at(-1) ?? "";
+  const joined = tokens.join("");
+  const firstLast = `${first}${last}`;
+  const lastFirst = `${last}${first}`;
+  const firstInitialLast = `${first.charAt(0)}${last}`;
+  const lastFirstInitial = `${last}${first.charAt(0)}`;
+  const firstLastInitial = `${first}${last.charAt(0)}`;
+
+  if (!normalizedLocalPart || !first || !last) {
+    return 0;
+  }
+
+  if (normalizedLocalPart === joined) {
+    return 10;
+  }
+
+  if (normalizedLocalPart === firstLast || normalizedLocalPart === lastFirst) {
+    return 9;
+  }
+
+  if (
+    normalizedLocalPart === firstInitialLast ||
+    normalizedLocalPart === lastFirstInitial ||
+    normalizedLocalPart === firstLastInitial
+  ) {
+    return 8;
+  }
+
+  if (normalizedLocalPart.startsWith(first) && normalizedLocalPart.includes(last)) {
+    return 7;
+  }
+
+  if (normalizedLocalPart.startsWith(last) && normalizedLocalPart.includes(first.charAt(0))) {
+    return 6;
+  }
+
+  if (normalizedLocalPart.includes(first) && normalizedLocalPart.includes(last)) {
+    return 5;
+  }
+
+  if (normalizedLocalPart === first || normalizedLocalPart === last) {
+    return 2;
+  }
+
+  if (last.length >= 4 && normalizedLocalPart.includes(last)) {
+    return 1;
+  }
+
+  return 0;
+}
+
+function findBestMatchingAuthor(localPart: string, authors: string[]) {
+  let bestAuthor = "";
+  let bestScore = 0;
+  let isTie = false;
+
+  for (const author of authors) {
+    const score = scoreEmailAuthorMatch(localPart, author);
+
+    if (score > bestScore) {
+      bestAuthor = author;
+      bestScore = score;
+      isTie = false;
+      continue;
+    }
+
+    if (score > 0 && score === bestScore) {
+      isTie = true;
+    }
+  }
+
+  return bestScore > 0 && !isTie ? bestAuthor : "";
+}
+
+export function assignEmailsToAuthors(emails: string[], authors: string[], maxAuthors = authors.length) {
+  const resolvedAuthors = uniqueStrings(authors).slice(0, maxAuthors);
+
+  if (resolvedAuthors.length === 0) {
+    return [] satisfies AuthorContactProfile[];
+  }
+
+  const normalizedEmails = uniqueStrings(emails.map((email) => normalizeEmail(email)).filter(Boolean));
+  const emailsByAuthor = new Map<string, string[]>();
+
+  for (const email of normalizedEmails) {
+    const matchedAuthor = findBestMatchingAuthor(email.split("@")[0] ?? "", resolvedAuthors);
+
+    if (!matchedAuthor) {
+      continue;
+    }
+
+    const currentEmails = emailsByAuthor.get(matchedAuthor) ?? [];
+    currentEmails.push(email);
+    emailsByAuthor.set(matchedAuthor, currentEmails);
+  }
+
+  if (normalizedEmails.length === resolvedAuthors.length) {
+    normalizedEmails.forEach((email, index) => {
+      const author = resolvedAuthors[index];
+
+      if (!author || (emailsByAuthor.get(author)?.length ?? 0) > 0) {
+        return;
+      }
+
+      emailsByAuthor.set(author, [...(emailsByAuthor.get(author) ?? []), email]);
+    });
+  }
+
+  return resolvedAuthors.map((author) => ({
+    author,
+    institutions: [],
+    emails: uniqueStrings(emailsByAuthor.get(author) ?? []),
+  })) satisfies AuthorContactProfile[];
+}
+
 function looksLikePersonName(value: string) {
   const candidate = compactText(value)
     .replace(/^[\d\s,*†‡§¶‖#()\-–—]+/, "")
@@ -539,6 +681,27 @@ export function extractAuthorAffiliationsFromText(text: string, authors: string[
       } satisfies AuthorAffiliation;
     })
     .filter((value): value is AuthorAffiliation => Boolean(value));
+}
+
+export function extractAuthorContactProfilesFromText(text: string, authors: string[], maxAuthors = authors.length) {
+  const resolvedAuthors = uniqueStrings(authors).slice(0, maxAuthors);
+
+  if (resolvedAuthors.length === 0) {
+    return [] satisfies AuthorContactProfile[];
+  }
+
+  const affiliationsByAuthor = new Map(
+    extractAuthorAffiliationsFromText(text, resolvedAuthors, maxAuthors).map((item) => [item.author, item.institutions]),
+  );
+  const emailsByAuthor = new Map(
+    assignEmailsToAuthors(extractEmailsFromText(text), resolvedAuthors, maxAuthors).map((item) => [item.author, item.emails]),
+  );
+
+  return resolvedAuthors.map((author) => ({
+    author,
+    institutions: uniqueStrings(affiliationsByAuthor.get(author) ?? []),
+    emails: uniqueStrings(emailsByAuthor.get(author) ?? []),
+  })) satisfies AuthorContactProfile[];
 }
 
 export function extractPaperDataFromText(text: string, fallbackAuthors: string[]) {

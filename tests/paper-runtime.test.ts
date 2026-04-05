@@ -31,6 +31,18 @@ This paper studies embodied planning.
     });
 
     expect(result.institutionNames).toEqual(["Tsinghua University", "Shanghai AI Laboratory"]);
+    expect(result.authorProfiles).toEqual([
+      {
+        author: "Jian Wu",
+        institutions: ["Tsinghua University"],
+        emails: [],
+      },
+      {
+        author: "Sofia Garcia",
+        institutions: ["Shanghai AI Laboratory"],
+        emails: [],
+      },
+    ]);
     expect(result.leadAuthorAffiliations).toEqual([
       { author: "Jian Wu", institutions: ["Tsinghua University"] },
       { author: "Sofia Garcia", institutions: ["Shanghai AI Laboratory"] },
@@ -73,9 +85,78 @@ This paper studies push-grasp manipulation.
 
     expect(extractPaperDataFromPdf).toHaveBeenCalledWith("https://arxiv.org/pdf/2603.12345.pdf", ["Alice Chen", "Bob Li"]);
     expect(result.institutionNames).toEqual(["Stanford University", "MIT"]);
+    expect(result.authorProfiles).toEqual([
+      {
+        author: "Alice Chen",
+        institutions: ["Stanford University"],
+        emails: ["alice@example.edu"],
+      },
+      {
+        author: "Bob Li",
+        institutions: ["MIT"],
+        emails: [],
+      },
+    ]);
     expect(result.leadAuthorAffiliations).toEqual([
       { author: "Alice Chen", institutions: ["Stanford University"] },
       { author: "Bob Li", institutions: ["MIT"] },
     ]);
+  });
+
+  it("reuses the same in-flight runtime enrichment for concurrent requests", async () => {
+    const extractPaperDataFromPdf = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(
+            () =>
+              resolve({
+                authors: ["Alice Chen", "Bob Li"],
+                emails: ["alice@example.edu"],
+                institutionNamesRaw: ["Stanford University", "MIT"],
+                pdfTextRaw: `
+Goal-Aware Push-Grasp Policy
+Alice Chen1, Bob Li2
+1 Stanford University
+2 MIT
+Abstract
+This paper studies push-grasp manipulation.
+`,
+              }),
+            5,
+          );
+        }),
+    );
+
+    vi.doMock("@/lib/pdf-paper-institutions", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("@/lib/pdf-paper-institutions")>();
+      return {
+        ...actual,
+        extractPaperDataFromPdf,
+      };
+    });
+
+    const { resolvePaperRuntimeMetadata } = await import("@/lib/paper-runtime");
+
+    const [first, second] = await Promise.all([
+      resolvePaperRuntimeMetadata({
+        cacheKey: "paper:gapg-concurrent",
+        paperUrl: "https://arxiv.org/abs/2603.12345",
+        authors: ["Alice Chen", "Bob Li"],
+        authorEmails: [],
+        institutionNames: [],
+        pdfTextRaw: "",
+      }),
+      resolvePaperRuntimeMetadata({
+        cacheKey: "paper:gapg-concurrent",
+        paperUrl: "https://arxiv.org/abs/2603.12345",
+        authors: ["Alice Chen", "Bob Li"],
+        authorEmails: [],
+        institutionNames: [],
+        pdfTextRaw: "",
+      }),
+    ]);
+
+    expect(extractPaperDataFromPdf).toHaveBeenCalledTimes(1);
+    expect(first.authorProfiles).toEqual(second.authorProfiles);
   });
 });

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { startTransition, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 
-import type { EventAnalysisView, EventDetailView, EventSummaryView, PersonView } from "@/lib/types";
+import type { EventAnalysisView, EventDetailView, EventSummaryView } from "@/lib/types";
 
 type EventSource = "github" | "arxiv";
 type EventDetailStatus = "idle" | "loading" | "ready" | "error";
@@ -847,8 +847,16 @@ export function EventBoard({
     toggleExpanded(stableId);
   }
 
-  function getPersonMeta(person: PersonView) {
-    return [person.organizationNamesRaw?.[0] ?? person.schoolNamesRaw?.[0] ?? person.labNamesRaw?.[0] ?? ""].filter(Boolean);
+  function getPersonMeta(person: EventDetailView["people"][number], sourceType: EventSource) {
+    const fallbackInstitution = person.organizationNamesRaw?.[0] ?? person.schoolNamesRaw?.[0] ?? person.labNamesRaw?.[0] ?? "";
+
+    if (sourceType !== "arxiv") {
+      return [fallbackInstitution].filter(Boolean);
+    }
+
+    const paperInstitutions = new Set((person.paperAuthorProfile?.institutions ?? []).filter(Boolean));
+
+    return [fallbackInstitution].filter((institution) => institution && !paperInstitutions.has(institution)).slice(0, 1);
   }
 
   function getEffectiveContributionCount(person: EventDetailView["people"][number]) {
@@ -869,10 +877,39 @@ export function EventBoard({
     return person.identitySummaryZh;
   }
 
-  function getReadablePersonLinks(person: EventDetailView["people"][number]) {
-    return person.links.map((link) => {
+  function shouldShowPersonEvidence(person: EventDetailView["people"][number], sourceType: EventSource) {
+    const evidence = person.evidenceSummaryZh.trim();
+
+    if (!evidence) {
+      return false;
+    }
+
+    if (sourceType === "arxiv" && /^(是当前论文作者|论文作者)$/u.test(evidence)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  function getPaperProfileInstitutionText(person: EventDetailView["people"][number]) {
+    return [...new Set((person.paperAuthorProfile?.institutions ?? []).filter(Boolean))].join(" / ");
+  }
+
+  function getPaperProfileEmails(person: EventDetailView["people"][number]) {
+    return [...new Set((person.paperAuthorProfile?.emails ?? []).map((email) => email.trim()).filter(Boolean))];
+  }
+
+  function getReadablePersonLinks(person: EventDetailView["people"][number], sourceType: EventSource) {
+    const paperEmails = new Set(sourceType === "arxiv" ? getPaperProfileEmails(person) : []);
+
+    return person.links.flatMap((link) => {
       if (link.label === "Email") {
         const email = link.url.replace(/^mailto:/i, "");
+
+        if (paperEmails.has(email)) {
+          return [];
+        }
+
         return {
           label: "邮箱",
           value: email,
@@ -1605,7 +1642,11 @@ export function EventBoard({
                                     <div className="person-card-grid">
                                       {visiblePeople.map((person) => {
                                       const isSaved = savedPersonIds.has(person.stableId);
-                                      const personMeta = getPersonMeta(person);
+                                      const personMeta = getPersonMeta(person, event.sourceType);
+                                      const paperInstitutionText = getPaperProfileInstitutionText(person);
+                                      const paperEmails = getPaperProfileEmails(person);
+                                      const readableLinks = getReadablePersonLinks(person, event.sourceType);
+                                      const showPersonEvidence = shouldShowPersonEvidence(person, event.sourceType);
 
                                       return (
                                         <article key={person.stableId} className="person-card">
@@ -1663,17 +1704,42 @@ export function EventBoard({
                                               ))}
                                             </div>
                                           ) : null}
-                                          <p className="person-card__evidence">{person.evidenceSummaryZh}</p>
-                                          <div className="link-list link-list--stacked">
-                                            {getReadablePersonLinks(person).map((sourceLink) => (
+                                          {showPersonEvidence ? <p className="person-card__evidence">{person.evidenceSummaryZh}</p> : null}
+                                          {event.sourceType === "arxiv" && (paperInstitutionText || paperEmails.length > 0) ? (
+                                            <div className="link-list link-list--stacked">
+                                              {paperInstitutionText ? (
+                                                <p className="link-list__text">
+                                                  <span>论文单位：</span>
+                                                  <span>{paperInstitutionText}</span>
+                                                </p>
+                                              ) : null}
+                                              {paperEmails.length > 0 ? (
+                                                <p className="link-list__text">
+                                                  <span>论文联系方式：</span>
+                                                  {paperEmails.map((email, index) => (
+                                                    <span key={`${person.stableId}-paper-email-${email}`}>
+                                                      {index > 0 ? " / " : ""}
+                                                      <Link href={`mailto:${email}`} target="_blank" rel="noreferrer">
+                                                        {email}
+                                                      </Link>
+                                                    </span>
+                                                  ))}
+                                                </p>
+                                              ) : null}
+                                            </div>
+                                          ) : null}
+                                          {readableLinks.length > 0 ? (
+                                            <div className="link-list link-list--stacked">
+                                              {readableLinks.map((sourceLink) => (
                                               <p key={`${person.stableId}-${sourceLink.label}-${sourceLink.value}`} className="link-list__text">
                                                 <span>{sourceLink.label}：</span>
                                                 <Link href={sourceLink.href} target="_blank" rel="noreferrer">
                                                   {sourceLink.value}
                                                 </Link>
                                               </p>
-                                            ))}
-                                          </div>
+                                              ))}
+                                            </div>
+                                          ) : null}
                                         </article>
                                       );
                                       })}

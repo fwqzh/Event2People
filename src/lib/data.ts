@@ -12,11 +12,11 @@ import { readStringArray } from "@/lib/json";
 import { generatePaperAnalysis } from "@/lib/paper-analysis";
 import { buildPaperExplanationZh, buildPaperTopicView } from "@/lib/paper-copy";
 import { buildPersonLinks } from "@/lib/person-links";
-import { resolvePaperRuntimeMetadata } from "@/lib/paper-runtime";
+import { resolvePaperRuntimeMetadata, type ResolvedPaperRuntimeMetadata } from "@/lib/paper-runtime";
 import { prisma } from "@/lib/prisma";
 import { ensureActiveDataset, parseLinks, parseMetrics } from "@/lib/seed";
 import { clampPlainText, compactInstitution, formatDay, timeAgo } from "@/lib/text";
-import type { EventAnalysisView, EventDetailView, EventSummaryView, PersonPreviewView, PersonView, PipelineEntryView } from "@/lib/types";
+import type { EventAnalysisView, EventDetailPersonView, EventDetailView, EventSummaryView, PersonPreviewView, PersonView, PipelineEntryView } from "@/lib/types";
 
 type PersonRecord = {
   stableId: string;
@@ -271,6 +271,27 @@ function getPersonPrimaryInstitution(
   );
 }
 
+function normalizeNameForMatching(value: string | null | undefined) {
+  return compactCopy(value)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function findPaperAuthorProfile(
+  personName: string,
+  runtimeMetadata: ResolvedPaperRuntimeMetadata | null,
+) {
+  if (!runtimeMetadata) {
+    return null;
+  }
+
+  const matchedName = normalizeNameForMatching(personName);
+
+  return runtimeMetadata.authorProfiles.find((profile) => normalizeNameForMatching(profile.author) === matchedName) ?? null;
+}
+
 function buildArxivSummaryMetadata(
   event: Pick<HomepageEventRecord, "eventTag"> | Pick<ActiveEventRecord, "eventTag">,
   paper: PaperRecord | undefined,
@@ -299,32 +320,25 @@ function buildArxivSummaryMetadata(
   };
 }
 
-async function buildArxivMetadata(
+function buildArxivMetadata(
   event: Pick<ActiveEventRecord, "eventTag">,
   paper: PaperRecord | undefined,
   people: ActiveEventRecord["personLinks"],
+  runtimeMetadata: ResolvedPaperRuntimeMetadata | null,
 ) {
   const summaryMetadata = buildArxivSummaryMetadata(event, paper);
+  const institutionsFromPeople = people.map((link) => getPersonPrimaryInstitution(link.person)).filter(Boolean);
 
-  if (!paper) {
+  if (!paper || !runtimeMetadata) {
     return {
       ...summaryMetadata,
-      authors: [],
+      authors: paper ? readStringArray(paper.authorsJson) : [],
       authorEmails: [],
-      institutions: [],
+      institutions: [...new Set(institutionsFromPeople)].slice(0, 3),
       leadAuthorAffiliations: [],
     };
   }
 
-  const runtimeMetadata = await resolvePaperRuntimeMetadata({
-    cacheKey: paper.stableId,
-    paperUrl: paper.paperUrl,
-    authors: readStringArray(paper.authorsJson),
-    authorEmails: readStringArray(paper.authorEmailsRaw),
-    institutionNames: readStringArray(paper.institutionNamesRaw),
-    pdfTextRaw: paper.pdfTextRaw,
-  });
-  const institutionsFromPeople = people.map((link) => getPersonPrimaryInstitution(link.person)).filter(Boolean);
   const institutions = runtimeMetadata.institutionNames.length > 0 ? runtimeMetadata.institutionNames : institutionsFromPeople;
 
   return {
@@ -421,10 +435,20 @@ function mapPersonPreview(person: PersonLinkRecord & Pick<PersonRecord, "stableI
   };
 }
 
-function mapEventDetailPerson(link: ActiveEventRecord["personLinks"][number]) {
+function mapEventDetailPerson(
+  link: ActiveEventRecord["personLinks"][number],
+  paperAuthorProfile?: ResolvedPaperRuntimeMetadata["authorProfiles"][number] | null,
+): EventDetailPersonView {
   return {
     ...mapPerson(link.person),
     contributionCount: link.contributionCount,
+    paperAuthorProfile: paperAuthorProfile
+      ? {
+          author: paperAuthorProfile.author,
+          institutions: paperAuthorProfile.institutions,
+          emails: paperAuthorProfile.emails,
+        }
+      : null,
   };
 }
 
@@ -480,7 +504,18 @@ async function mapEventDetail(
   const projects = event.projectLinks.map((link) => link.project);
   const papers = event.paperLinks.map((link) => link.paper);
   const arxivNarrative = event.sourceType === "arxiv" ? buildArxivNarrative(event, papers[0]) : null;
-  const arxivMetadata = event.sourceType === "arxiv" ? await buildArxivMetadata(event, papers[0], event.personLinks) : null;
+  const runtimeMetadata =
+    event.sourceType === "arxiv" && papers[0]
+      ? await resolvePaperRuntimeMetadata({
+          cacheKey: papers[0].stableId,
+          paperUrl: papers[0].paperUrl,
+          authors: readStringArray(papers[0].authorsJson),
+          authorEmails: readStringArray(papers[0].authorEmailsRaw),
+          institutionNames: readStringArray(papers[0].institutionNamesRaw),
+          pdfTextRaw: papers[0].pdfTextRaw,
+        })
+      : null;
+  const arxivMetadata = event.sourceType === "arxiv" ? buildArxivMetadata(event, papers[0], event.personLinks, runtimeMetadata) : null;
   const safeHighlight =
     event.sourceType === "github"
       ? normalizeGitHubHighlight(event.eventHighlightZh, projects[0], event.eventTag as EventSummaryView["eventTag"])
@@ -502,7 +537,7 @@ async function mapEventDetail(
 
   return {
     stableId: event.stableId,
-    people: event.personLinks.map((link) => mapEventDetailPerson(link)),
+    people: event.personLinks.map((link) => mapEventDetailPerson(link, findPaperAuthorProfile(link.person.name, runtimeMetadata))),
     sourceSummaryLabel: getSourceSummaryLabel(event.sourceType),
     detailSummary,
     introSummary:

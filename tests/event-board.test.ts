@@ -3,7 +3,7 @@
 import "@testing-library/jest-dom/vitest";
 import React from "react";
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -740,6 +740,94 @@ describe("EventBoard", () => {
     expect(screen.getByText("引用来源")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Embodied Planning Kernel 论文解读" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Planning Kernel: 把长链规划拆成基础模块" })).toBeInTheDocument();
+  });
+
+  it("shows pdf-extracted affiliations and contact emails on arxiv author cards", async () => {
+    const user = userEvent.setup();
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+
+        if (url.includes("/api/pipeline")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ ok: true, savedPersonStableIds: [] }),
+          });
+        }
+
+        if (url.includes("/api/events/analysis")) {
+          return Promise.resolve(createAnalysisResponse());
+        }
+
+        return Promise.resolve(
+          createResponse(
+            createDetail({
+              stableId: "event:arxiv:planning-kernel",
+              sourceSummaryLabel: "论文概览",
+              detailSummary: "这篇论文聚焦复杂任务规划。",
+              introSummary: "这篇论文聚焦复杂任务规划。",
+              people: [
+                {
+                  stableId: "author:jian-wu",
+                  name: "Jian Wu",
+                  identitySummaryZh: "AI 研究者 · arXiv 作者",
+                  evidenceSummaryZh: "是当前论文作者",
+                  sourceUrls: [],
+                  links: [],
+                  contributionCount: 0,
+                  paperAuthorProfile: {
+                    author: "Jian Wu",
+                    institutions: ["Tsinghua University"],
+                    emails: ["jian@tsinghua.edu.cn"],
+                  },
+                },
+              ],
+              paperMetadata: {
+                publishedAtLabel: "2025-03-02",
+                authors: ["Jian Wu"],
+                authorEmails: ["jian@tsinghua.edu.cn"],
+                institutions: ["Tsinghua University"],
+                leadAuthorAffiliations: [{ author: "Jian Wu", institutions: ["Tsinghua University"] }],
+                topic: "复杂任务规划",
+                keywords: ["复杂任务规划"],
+              },
+            }),
+          ),
+        );
+      }),
+    );
+
+    render(
+      React.createElement(EventBoard, {
+        datasetVersionId: "dataset-1",
+        savedPersonStableIds: [],
+        githubEvents: [],
+        arxivEvents: [
+          createArxivSummaryEvent({
+            stableId: "event:arxiv:planning-kernel",
+            cardTitle: "Embodied Planning Kernel",
+            sourceLinks: [{ label: "Paper", url: "https://arxiv.org/abs/2503.01022" }],
+            previewPeople: [],
+            peopleCount: 0,
+            personStableIds: [],
+          }),
+        ],
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "展开 Embodied Planning Kernel" }));
+
+    expect(await screen.findByText("论文单位：")).toBeInTheDocument();
+    expect(screen.queryByText("是当前论文作者")).not.toBeInTheDocument();
+    expect(screen.getByText("论文联系方式：")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "jian@tsinghua.edu.cn" })).toHaveAttribute("href", "mailto:jian@tsinghua.edu.cn");
+    const authorCardHeading = screen.getByRole("heading", { name: "Jian Wu", level: 6 });
+    const authorCard = authorCardHeading.closest("article");
+
+    expect(authorCard).not.toBeNull();
+    expect(within(authorCard as HTMLElement).getAllByText("Tsinghua University")).toHaveLength(1);
   });
 
   it("shows arxiv filters and keeps the default list at the first 20 matching papers", async () => {

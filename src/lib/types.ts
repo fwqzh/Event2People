@@ -150,6 +150,12 @@ export type PersonView = PersonInput & {
   links: LinkItem[];
 };
 
+export type PaperAuthorProfileView = {
+  author: string;
+  institutions: string[];
+  emails: string[];
+};
+
 export type PersonPreviewView = {
   stableId: string;
   name: string;
@@ -171,13 +177,14 @@ export type EventSummaryView = EventInput & {
   } | null;
 };
 
+export type EventDetailPersonView = PersonView & {
+  contributionCount: number;
+  paperAuthorProfile?: PaperAuthorProfileView | null;
+};
+
 export type EventDetailView = {
   stableId: string;
-  people: Array<
-    PersonView & {
-      contributionCount: number;
-    }
-  >;
+  people: EventDetailPersonView[];
   sourceSummaryLabel: string;
   detailSummary: string;
   introSummary: string;
