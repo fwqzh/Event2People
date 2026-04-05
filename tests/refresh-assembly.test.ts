@@ -100,9 +100,13 @@ describe("refresh dataset assembly", () => {
     expect(bundle.events[0]?.eventType).toBe("implementation");
     expect(bundle.events[1]?.projectStableIds).toEqual(["repo:open/alpha"]);
     expect(bundle.events[1]?.displayRank).toBe(1);
+    expect(bundle.events[1]?.eventDetailSummaryZh).toBeTruthy();
+    expect(bundle.events[1]?.eventDetailSummaryZh).not.toMatch(/研究入口|实现关系|人物关系|可直接追溯/u);
     expect(bundle.events[2]?.projectStableIds).toEqual([]);
     expect(bundle.events[2]?.eventType).toBe("new_paper");
     expect(bundle.events[2]?.displayRank).toBe(2);
+    expect(bundle.events[2]?.eventDetailSummaryZh).toBeTruthy();
+    expect(bundle.events[2]?.eventDetailSummaryZh).not.toMatch(/研究入口|实现关系|人物关系|可直接追溯/u);
     expect(bundle.people).toHaveLength(2);
   });
 });

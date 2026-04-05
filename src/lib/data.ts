@@ -218,6 +218,16 @@ function getSourceSummaryLabel(sourceType: "github" | "arxiv") {
   return sourceType === "github" ? "项目简介" : "论文概览";
 }
 
+function isGenericArxivSummary(value: string | null | undefined) {
+  const summary = compactCopy(value);
+
+  if (!summary) {
+    return true;
+  }
+
+  return /研究入口|实现关系|人物关系|可直接追溯|适合作为判断与存人的起点|值得优先跟进|连接到可执行实现/u.test(summary);
+}
+
 function buildSourceSummary(
   sourceType: "github" | "arxiv",
   project: ProjectRecord | undefined,
@@ -256,6 +266,27 @@ function buildArxivNarrative(
     hasCode: Boolean(paper.codeUrl || (event.relatedRepoCount ?? 0) > 0),
     relatedRepoCount: event.relatedRepoCount,
   });
+}
+
+function buildArxivReadableSummary(
+  event: Pick<HomepageEventRecord, "eventDetailSummaryZh" | "eventHighlightZh"> | Pick<ActiveEventRecord, "eventDetailSummaryZh" | "eventHighlightZh">,
+  paper: PaperRecord | undefined,
+  arxivNarrative: ReturnType<typeof buildArxivNarrative> | null,
+  limit: number,
+) {
+  const aiSummary = compactCopy(event.eventDetailSummaryZh);
+
+  if (!isGenericArxivSummary(aiSummary)) {
+    return clampCopy(aiSummary, limit);
+  }
+
+  const fallbackLead = compactCopy(arxivNarrative?.lead);
+
+  if (fallbackLead) {
+    return clampCopy(fallbackLead, limit);
+  }
+
+  return buildSourceSummary("arxiv", undefined, paper, compactCopy(event.eventHighlightZh), limit);
 }
 
 function getPersonPrimaryInstitution(
@@ -466,7 +497,7 @@ function mapEventSummary(
   const cardSummary =
     event.sourceType === "github"
       ? getGitHubNarrativeSummary(event, projects[0], safeHighlight)
-      : clampCopy(arxivNarrative?.lead ?? buildSourceSummary(event.sourceType, projects[0], papers[0], safeHighlight, CARD_SOURCE_SUMMARY_LIMIT), CARD_SOURCE_SUMMARY_LIMIT);
+      : buildArxivReadableSummary(event, papers[0], arxivNarrative, CARD_SOURCE_SUMMARY_LIMIT);
   const paperSummaryMetadata = event.sourceType === "arxiv" ? buildArxivSummaryMetadata(event, papers[0]) : null;
 
   return {
@@ -522,7 +553,7 @@ async function mapEventDetail(
       : event.eventHighlightZh;
   const detailSummary =
     event.sourceType === "arxiv"
-      ? clampCopy(arxivNarrative?.lead ?? safeHighlight, DETAIL_SOURCE_SUMMARY_LIMIT)
+      ? buildArxivReadableSummary(event, papers[0], arxivNarrative, DETAIL_SOURCE_SUMMARY_LIMIT)
       : buildSourceSummary(
           event.sourceType,
           projects[0],
@@ -533,7 +564,7 @@ async function mapEventDetail(
   const cardSummary =
     event.sourceType === "github"
       ? getGitHubNarrativeSummary(event, projects[0], safeHighlight)
-      : clampCopy(arxivNarrative?.lead ?? buildSourceSummary(event.sourceType, projects[0], papers[0], safeHighlight, CARD_SOURCE_SUMMARY_LIMIT), CARD_SOURCE_SUMMARY_LIMIT);
+      : buildArxivReadableSummary(event, papers[0], arxivNarrative, CARD_SOURCE_SUMMARY_LIMIT);
 
   return {
     stableId: event.stableId,

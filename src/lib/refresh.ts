@@ -6,6 +6,7 @@ import { buildGitHubProjectIntroZh } from "@/lib/github-copy";
 import { readStringArray } from "@/lib/json";
 import { shouldMergePeople } from "@/lib/merge-people";
 import { enrichBundleWithOpenAI } from "@/lib/openai-enrichment";
+import { buildPaperExplanationZh } from "@/lib/paper-copy";
 import {
   buildRefreshRangeProgress,
   buildRefreshStageMessage,
@@ -546,6 +547,14 @@ function buildArxivEvents(papers: PaperInput[], confirmedLinksByPaper: Map<strin
     const linkedProjects = confirmedLinksByPaper.get(paper.stableId) ?? [];
     const tag = classifyEventTag([paper.paperTitle, paper.pdfTextRaw ?? paper.abstractRaw ?? ""]);
     const type = linkedProjects.length > 0 ? (paper.codeUrl ? "paper_with_code" : "implementation") : "new_paper";
+    const fallbackSummary = buildPaperExplanationZh({
+      paperTitle: paper.paperTitle,
+      contentRaw: paper.pdfTextRaw,
+      abstractRaw: paper.abstractRaw,
+      eventTag: tag.tag,
+      hasCode: Boolean(paper.codeUrl || linkedProjects.length > 0),
+      relatedRepoCount: linkedProjects.length,
+    }).lead;
 
     return {
       stableId: `event:arxiv:${slugify(paper.paperTitle)}`,
@@ -558,7 +567,7 @@ function buildArxivEvents(papers: PaperInput[], confirmedLinksByPaper: Map<strin
         32,
       ),
       eventHighlightZh: sentenceZh(type === "new_paper" ? "相关论文流中出现新的研究入口。" : "研究入口已经连接到更可执行的实现。", 20),
-      eventDetailSummaryZh: "论文与实现、人物关系可直接追溯到原始页面。",
+      eventDetailSummaryZh: clampZh(fallbackSummary, 64),
       timePrimary: paper.publishedAt,
       metrics: [
         metric("时间", "近期"),
