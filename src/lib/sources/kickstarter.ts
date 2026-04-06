@@ -32,7 +32,7 @@ const QUERY_BUCKETS: ReadonlyArray<{ query: string; timeRange: "week" | "month" 
     timeRange: "month",
   },
 ];
-const ALLOWED_PROJECT_SUBPAGES = new Set(["description"]);
+const ALLOWED_PROJECT_SUBPAGES = new Set(["comments", "community", "description", "faq", "faqs", "rewards"]);
 const CURRENCY_TOKEN = String.raw`(?:(?:US|CA|AU|NZ|HK|SG)?\$|€|£)\s?[\d,.]+(?:\s?[KMBkmb])?`;
 const AI_KEYWORDS = [
   "ai",
@@ -167,6 +167,16 @@ function hasKeyword(text: string, keyword: string) {
 
 function countKeywordHits(text: string, keywords: readonly string[]) {
   return keywords.reduce((count, keyword) => count + (hasKeyword(text, keyword) ? 1 : 0), 0);
+}
+
+function getKickstarterKeywordHits(text: string) {
+  const haystack = text.toLowerCase();
+
+  return {
+    aiHits: countKeywordHits(haystack, AI_KEYWORDS),
+    hardwareHits: countKeywordHits(haystack, HARDWARE_KEYWORDS),
+    consumerElectronicsHits: countKeywordHits(haystack, CONSUMER_ELECTRONICS_KEYWORDS),
+  };
 }
 
 function normalizeUrl(value: string | null | undefined) {
@@ -401,12 +411,12 @@ function getStatusLabel(text: string, daysLeftLabel: string | null) {
 }
 
 function getSearchRelevance(text: string) {
-  const haystack = text.toLowerCase();
+  const { aiHits, hardwareHits, consumerElectronicsHits } = getKickstarterKeywordHits(text);
 
   return (
-    countKeywordHits(haystack, AI_KEYWORDS) * 2 +
-    countKeywordHits(haystack, HARDWARE_KEYWORDS) * 3 +
-    countKeywordHits(haystack, CONSUMER_ELECTRONICS_KEYWORDS) * 2
+    aiHits * 2 +
+    hardwareHits * 3 +
+    consumerElectronicsHits * 2
   );
 }
 
@@ -414,14 +424,16 @@ function isExcludedKickstarterProject(text: string) {
   return countKeywordHits(text.toLowerCase(), EXCLUDED_KEYWORDS) > 0;
 }
 
-function isTargetKickstarterProject(text: string) {
+function isTargetKickstarterProject(text: string, options?: { requireStrongSignal?: boolean }) {
   const haystack = text.toLowerCase();
-  const aiHits = countKeywordHits(haystack, AI_KEYWORDS);
-  const hardwareHits = countKeywordHits(haystack, HARDWARE_KEYWORDS);
-  const consumerElectronicsHits = countKeywordHits(haystack, CONSUMER_ELECTRONICS_KEYWORDS);
+  const { aiHits, hardwareHits, consumerElectronicsHits } = getKickstarterKeywordHits(haystack);
 
   if (isExcludedKickstarterProject(haystack)) {
     return false;
+  }
+
+  if (options?.requireStrongSignal) {
+    return (aiHits > 0 && hardwareHits > 0) || hardwareHits >= 2;
   }
 
   if (consumerElectronicsHits > 0 && hardwareHits > 0) {
@@ -535,8 +547,10 @@ export function parseKickstarterCampaignCandidate(
   const daysLeftLabel = extractDaysLeftLabel(haystack);
   const startDate = extractStartDate(haystack);
   const statusLabel = getStatusLabel(haystack, daysLeftLabel);
+  const hasFundingSignal =
+    pledged.amount !== null || goal.amount !== null || backers.count !== null || Boolean(daysLeftLabel) || Boolean(startDate.startedAt);
 
-  if (pledged.amount === null) {
+  if (!hasFundingSignal && !isTargetKickstarterProject(haystack, { requireStrongSignal: true })) {
     return null;
   }
 

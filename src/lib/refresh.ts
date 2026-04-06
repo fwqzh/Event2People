@@ -32,6 +32,8 @@ const HOMEPAGE_ARXIV_LIMIT = 10;
 const ARXIV_ACTIVE_POOL_LIMIT = 50;
 const AI_EVENT_ENRICH_LIMIT = GITHUB_REFRESH_FETCH_LIMIT + KICKSTARTER_REFRESH_FETCH_LIMIT + HOMEPAGE_ARXIV_LIMIT;
 const STALE_REFRESH_MINUTES = 15;
+const KICKSTARTER_FALLBACK_EXCLUSION_PATTERN =
+  /(board game|tabletop|video game|card game|miniatures|rpg|ttrpg|comic|manga|graphic novel|novel|book launch|feature film|short film|film|movie|album|soundtrack|tarot|zine|playmat|expansion|桌游|卡牌|电子游戏|游戏|角色扮演|漫画|小说|电影|专辑|塔罗|扩展)/i;
 const countFormatter = new Intl.NumberFormat("en-US");
 
 function metric(label: string, value: string) {
@@ -849,23 +851,28 @@ function mapFallbackKickstarterPeople(events: KickstarterFallbackEventRecord[]) 
   return [...people.values()];
 }
 
+function isRelevantKickstarterFallbackEvent(event: EventInput) {
+  const haystack = [
+    event.eventTitleZh,
+    event.eventHighlightZh,
+    event.eventDetailSummaryZh ?? "",
+    ...event.sourceLinks.map((item) => `${item.label} ${item.url}`),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  return !KICKSTARTER_FALLBACK_EXCLUSION_PATTERN.test(haystack);
+}
+
 async function loadKickstarterFallbackCampaigns(prisma: ArxivRefreshFallbackPrisma, limit: number) {
-  const activeDataset = await prisma.datasetVersion.findFirst({
-    where: { status: "ACTIVE" },
-    select: { id: true },
-  });
-
-  if (!activeDataset) {
-    return {
-      events: [] as EventInput[],
-      people: [] as PersonInput[],
-    };
-  }
-
-  const events = await prisma.event.findMany({
+  const fallbackPool = await prisma.event.findMany({
     where: {
-      datasetVersionId: activeDataset.id,
       sourceType: "kickstarter",
+      datasetVersion: {
+        publishedAt: {
+          not: null,
+        },
+      },
     },
     include: {
       personLinks: {
@@ -873,14 +880,78 @@ async function loadKickstarterFallbackCampaigns(prisma: ArxivRefreshFallbackPris
         include: { person: true },
       },
     },
-    orderBy: { displayRank: "asc" },
-    take: limit,
+    orderBy: [{ datasetVersion: { publishedAt: "desc" } }, { displayRank: "asc" }],
+    take: Math.max(limit * 5, limit),
   });
+  const dedupedEvents: KickstarterFallbackEventRecord[] = [];
+  const seenStableIds = new Set<string>();
+
+  for (const event of fallbackPool) {
+    if (seenStableIds.has(event.stableId)) {
+      continue;
+    }
+
+    seenStableIds.add(event.stableId);
+    dedupedEvents.push(event);
+
+    if (dedupedEvents.length >= limit) {
+      break;
+    }
+  }
+
+  const mappedFallback = dedupedEvents
+    .map((event) => ({
+      raw: event,
+      input: mapFallbackKickstarterEventToInput(event),
+    }))
+    .filter((record) => isRelevantKickstarterFallbackEvent(record.input))
+    .slice(0, limit);
 
   return {
-    events: events.map(mapFallbackKickstarterEventToInput),
-    people: mapFallbackKickstarterPeople(events),
+    events: mappedFallback.map((record, index) => ({
+      ...record.input,
+      displayRank: index + 1,
+    })),
+    people: mapFallbackKickstarterPeople(mappedFallback.map((record) => record.raw)),
   };
+}
+
+function mergeKickstarterRefreshEvents(liveEvents: EventInput[], fallbackEvents: EventInput[], limit: number) {
+  const mergedEvents: EventInput[] = [];
+  const seenStableIds = new Set<string>();
+
+  for (const event of [...liveEvents, ...fallbackEvents]) {
+    if (seenStableIds.has(event.stableId)) {
+      continue;
+    }
+
+    seenStableIds.add(event.stableId);
+    mergedEvents.push({
+      ...event,
+      displayRank: mergedEvents.length + 1,
+    });
+
+    if (mergedEvents.length >= limit) {
+      break;
+    }
+  }
+
+  return mergedEvents;
+}
+
+function mergeKickstarterRefreshPeople(events: EventInput[], livePeople: PersonInput[], fallbackPeople: PersonInput[]) {
+  const requiredStableIds = new Set(events.flatMap((event) => event.personStableIds));
+  const people = new Map<string, PersonInput>();
+
+  for (const person of [...livePeople, ...fallbackPeople]) {
+    if (!requiredStableIds.has(person.stableId) || people.has(person.stableId)) {
+      continue;
+    }
+
+    people.set(person.stableId, person);
+  }
+
+  return [...people.values()];
 }
 
 export async function loadKickstarterCampaignsForRefresh(
@@ -889,21 +960,38 @@ export async function loadKickstarterCampaignsForRefresh(
 ): Promise<{ events: EventInput[]; people: PersonInput[]; warning: string | null }> {
   try {
     const campaigns = await fetchKickstarterCampaigns(limit);
+    const liveEvents = buildKickstarterEvents(campaigns);
+    const livePeople = campaigns.map(personFromKickstarterCreator).filter(Boolean) as PersonInput[];
 
-    if (campaigns.length > 0) {
+    if (liveEvents.length >= limit) {
       return {
-        events: buildKickstarterEvents(campaigns),
-        people: campaigns.map(personFromKickstarterCreator).filter(Boolean) as PersonInput[],
+        events: liveEvents,
+        people: livePeople,
         warning: null,
       };
     }
 
     const fallback = await loadKickstarterFallbackCampaigns(prisma, limit);
 
+    if (liveEvents.length > 0) {
+      const mergedEvents = mergeKickstarterRefreshEvents(liveEvents, fallback.events, limit);
+
+      return {
+        events: mergedEvents,
+        people: mergeKickstarterRefreshPeople(mergedEvents, livePeople, fallback.people),
+        warning:
+          mergedEvents.length > liveEvents.length
+            ? `Kickstarter live 仅抓到 ${liveEvents.length} 个 campaign，已用最近历史数据补齐到 ${mergedEvents.length} 个`
+            : liveEvents.length < limit
+              ? `Kickstarter live 仅抓到 ${liveEvents.length} 个 campaign，暂无更多历史数据可补齐`
+              : null,
+      };
+    }
+
     if (fallback.events.length > 0) {
       return {
         ...fallback,
-        warning: `Kickstarter 暂未抓到可用项目，已回退到当前活跃数据集的 ${fallback.events.length} 个 campaign`,
+        warning: `Kickstarter 暂未抓到可用项目，已回退到最近历史数据中的 ${fallback.events.length} 个 campaign`,
       };
     }
 
@@ -921,7 +1009,7 @@ export async function loadKickstarterCampaignsForRefresh(
     if (fallback.events.length > 0) {
       return {
         ...fallback,
-        warning: `Kickstarter 临时不可用，已回退到当前活跃数据集的 ${fallback.events.length} 个 campaign`,
+        warning: `Kickstarter 临时不可用，已回退到最近历史数据中的 ${fallback.events.length} 个 campaign`,
       };
     }
 

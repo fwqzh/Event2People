@@ -15,6 +15,18 @@ describe("kickstarter source helpers", () => {
       normalizeKickstarterCampaignUrl("https://www.kickstarter.com/projects/lenaortiz/orbital-coder/description"),
     ).toBe("https://www.kickstarter.com/projects/lenaortiz/orbital-coder");
     expect(
+      normalizeKickstarterCampaignUrl("https://www.kickstarter.com/projects/lenaortiz/orbital-coder/community"),
+    ).toBe("https://www.kickstarter.com/projects/lenaortiz/orbital-coder");
+    expect(
+      normalizeKickstarterCampaignUrl("https://www.kickstarter.com/projects/lenaortiz/orbital-coder/rewards"),
+    ).toBe("https://www.kickstarter.com/projects/lenaortiz/orbital-coder");
+    expect(
+      normalizeKickstarterCampaignUrl("https://www.kickstarter.com/projects/lenaortiz/orbital-coder/faqs"),
+    ).toBe("https://www.kickstarter.com/projects/lenaortiz/orbital-coder");
+    expect(
+      normalizeKickstarterCampaignUrl("https://www.kickstarter.com/projects/lenaortiz/orbital-coder/comments"),
+    ).toBe("https://www.kickstarter.com/projects/lenaortiz/orbital-coder");
+    expect(
       normalizeKickstarterCampaignUrl("https://www.kickstarter.com/projects/lenaortiz/orbital-coder/posts/1234567"),
     ).toBe("");
     expect(normalizeKickstarterCampaignUrl("https://www.kickstarter.com/discover")).toBe("");
@@ -57,6 +69,21 @@ describe("kickstarter source helpers", () => {
     expect(candidate?.isLive).toBe(true);
   });
 
+  it("keeps strong ai hardware candidates even when Tavily omits funding metrics", () => {
+    const candidate = parseKickstarterCampaignCandidate({
+      title: "Dymesty AI Glasses: World's First Titanium AI Glasses by Dymesty — Kickstarter",
+      url: "https://www.kickstarter.com/projects/dymesty/dymesty-ai-glasses-when-sleek-design-meets-ai/rewards",
+      content:
+        "Dymesty is raising funds for Dymesty AI Glasses: World's First Titanium AI Glasses on Kickstarter! Open-ear audio, real-time AI assistance, translation, and a 12MP camera built into lightweight titanium frames.",
+      score: 0.96,
+    });
+
+    expect(candidate).toBeTruthy();
+    expect(candidate?.campaignUrl).toBe("https://www.kickstarter.com/projects/dymesty/dymesty-ai-glasses-when-sleek-design-meets-ai");
+    expect(candidate?.pledgedAmount).toBeNull();
+    expect(candidate?.statusLabel).toBe("Unknown");
+  });
+
   it("filters out games and entertainment projects", () => {
     const candidate = parseKickstarterCampaignCandidate({
       title: "Realm of Reckoning by IV Studios - Kickstarter",
@@ -64,6 +91,18 @@ describe("kickstarter source helpers", () => {
       content:
         "IV Studios is raising funds for Realm of Reckoning on Kickstarter! A new fantasy board game with miniatures. $672,875 pledged of $50,000 goal 5,824 backers 11 days left.",
       score: 0.94,
+    });
+
+    expect(candidate).toBeNull();
+  });
+
+  it("still rejects weak consumer electronics pages when there is no funding signal", () => {
+    const candidate = parseKickstarterCampaignCandidate({
+      title: "TIMES FLY - Running sunglasses have been reinvented - Kickstarter",
+      url: "https://www.kickstarter.com/projects/times/times-fly-running-sunglasses-have-been-reinvented",
+      content:
+        "Times Eyewear is raising funds for TIMES FLY - Running sunglasses have been reinvented on Kickstarter! Run light and stay secure with our unique strap system.",
+      score: 0.98,
     });
 
     expect(candidate).toBeNull();
