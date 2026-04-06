@@ -702,6 +702,7 @@ function buildKickstarterEvents(campaigns: KickstarterCampaign[]) {
       timePrimary: campaign.collectedAt,
       metrics: [
         metric("Pledged", campaign.pledgedLabel || formatKickstarterMoney(campaign.pledgedAmount)),
+        ...(campaign.startedAt ? [metric("Started", formatDay(campaign.startedAt))] : []),
         metric("Goal", campaign.goalLabel || formatKickstarterMoney(campaign.goalAmount)),
         metric("Backers", campaign.backersLabel || formatKickstarterCount(campaign.backersCount)),
         campaign.daysLeftLabel ? metric("Days Left", campaign.daysLeftLabel) : metric("Status", campaign.statusLabel || "Unknown"),

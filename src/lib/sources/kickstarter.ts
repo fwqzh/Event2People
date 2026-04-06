@@ -1,3 +1,5 @@
+import { isValid, parse } from "date-fns";
+
 import { getTavilyApiKey } from "@/lib/runtime-settings";
 import { clampPlainText } from "@/lib/text";
 
@@ -135,6 +137,8 @@ export type KickstarterCampaign = {
   campaignUrl: string;
   creatorName: string;
   creatorUrl: string | null;
+  startedAt: Date | null;
+  startedLabel: string | null;
   summaryRaw: string;
   pledgedAmount: number | null;
   pledgedLabel: string;
@@ -343,6 +347,43 @@ function extractDaysLeftLabel(text: string) {
   return null;
 }
 
+function parseKickstarterDate(value: string) {
+  const candidate = compactText(value).replace(/\s+/g, " ");
+  const patterns = ["MMM d yyyy", "MMM d, yyyy", "MMMM d yyyy", "MMMM d, yyyy"];
+
+  for (const pattern of patterns) {
+    const parsed = parse(candidate, pattern, new Date());
+
+    if (isValid(parsed)) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function extractStartDate(text: string) {
+  const monthToken =
+    "(?:Jan|January|Feb|February|Mar|March|Apr|April|May|Jun|June|Jul|July|Aug|August|Sep|Sept|September|Oct|October|Nov|November|Dec|December)";
+  const dateToken = `(${monthToken}\\s+\\d{1,2},?\\s+\\d{4})`;
+  const fundingPeriodMatch = text.match(new RegExp(`funding period\\s+${dateToken}\\s*-\\s*(?:${monthToken}\\s+\\d{1,2},?\\s+\\d{4})`, "i"));
+
+  if (!fundingPeriodMatch?.[1]) {
+    return { startedAt: null, startedLabel: null };
+  }
+
+  const startedAt = parseKickstarterDate(fundingPeriodMatch[1]);
+
+  if (!startedAt) {
+    return { startedAt: null, startedLabel: null };
+  }
+
+  return {
+    startedAt,
+    startedLabel: fundingPeriodMatch[1].replace(/\s+/g, " ").trim(),
+  };
+}
+
 function getStatusLabel(text: string, daysLeftLabel: string | null) {
   if (daysLeftLabel || /\blive\b|back this project|pledge/i.test(text)) {
     return "Live";
@@ -492,6 +533,7 @@ export function parseKickstarterCampaignCandidate(
   const goal = extractGoalMetric(haystack);
   const backers = extractBackersMetric(haystack);
   const daysLeftLabel = extractDaysLeftLabel(haystack);
+  const startDate = extractStartDate(haystack);
   const statusLabel = getStatusLabel(haystack, daysLeftLabel);
 
   if (pledged.amount === null) {
@@ -503,6 +545,8 @@ export function parseKickstarterCampaignCandidate(
     campaignUrl,
     creatorName,
     creatorUrl: null,
+    startedAt: startDate.startedAt,
+    startedLabel: startDate.startedLabel,
     summaryRaw: buildSummary(result.content || result.title, campaignName),
     pledgedAmount: pledged.amount,
     pledgedLabel: pledged.label,

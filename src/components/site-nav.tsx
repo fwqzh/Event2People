@@ -24,20 +24,20 @@ export function SiteNav({ lastUpdatedLabel }: SiteNavProps) {
         GitHub
       </Link>
       <Link
+        href="/arxiv"
+        className={`site-nav__button ${isArxivActive ? "is-active" : ""}`}
+        aria-current={isArxivActive ? "page" : undefined}
+      >
+        arXiv
+      </Link>
+      <Link
         href="/kickstarter"
         className={`site-nav__button ${isKickstarterActive ? "is-active" : ""}`}
         aria-current={isKickstarterActive ? "page" : undefined}
       >
         Kickstarter
       </Link>
-      <Link href="/arxiv" className={`site-nav__button ${isArxivActive ? "is-active" : ""}`} aria-current={isArxivActive ? "page" : undefined}>
-        arXiv
-      </Link>
-      <Link
-        href="/pipeline"
-        className={`site-nav__button ${isPipelineActive ? "is-active" : ""}`}
-        aria-current={isPipelineActive ? "page" : undefined}
-      >
+      <Link href="/pipeline" className={`site-nav__button ${isPipelineActive ? "is-active" : ""}`} aria-current={isPipelineActive ? "page" : undefined}>
         Pipeline
       </Link>
       <HeaderSettingsButton isActive={isSettingsActive} />

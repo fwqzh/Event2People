@@ -25,7 +25,7 @@ describe("kickstarter source helpers", () => {
       title: "Echo Clip by Mei Lin — Kickstarter",
       url: "https://www.kickstarter.com/projects/meilin/echo-clip?ref=discovery",
       content:
-        "Echo Clip is an AI voice recorder with on-device transcription, speaker playback, and microphone array. $240,000 pledged of $50,000 goal 3,200 backers 12 days to go.",
+        "Funding period Mar 18 2026 - Apr 12 2026 (25 days). Echo Clip is an AI voice recorder with on-device transcription, speaker playback, and microphone array. $240,000 pledged of $50,000 goal 3,200 backers 12 days to go.",
       score: 0.95,
     });
 
@@ -35,6 +35,8 @@ describe("kickstarter source helpers", () => {
     expect(candidate?.pledgedAmount).toBe(240000);
     expect(candidate?.goalAmount).toBe(50000);
     expect(candidate?.backersCount).toBe(3200);
+    expect(candidate?.startedLabel).toBe("Mar 18 2026");
+    expect(candidate?.startedAt?.toISOString()).toContain("2026-03-18");
     expect(candidate?.daysLeftLabel).toBe("12 days");
     expect(candidate?.isLive).toBe(true);
   });
@@ -76,6 +78,8 @@ describe("kickstarter source helpers", () => {
         campaignUrl: "https://www.kickstarter.com/projects/lenaortiz/orbital-coder",
         creatorName: "Lena Ortiz",
         creatorUrl: null,
+        startedAt: now,
+        startedLabel: "2026-04-06",
         summaryRaw: "AI agent devtool",
         pledgedAmount: 240000,
         pledgedLabel: "$240,000",
@@ -94,6 +98,8 @@ describe("kickstarter source helpers", () => {
         campaignUrl: "https://www.kickstarter.com/projects/lenaortiz/orbital-coder",
         creatorName: "Lena Ortiz",
         creatorUrl: null,
+        startedAt: older,
+        startedLabel: "2026-04-05",
         summaryRaw: "",
         pledgedAmount: 210000,
         pledgedLabel: "$210,000",
@@ -112,6 +118,8 @@ describe("kickstarter source helpers", () => {
         campaignUrl: "https://www.kickstarter.com/projects/omar/atlas-arm",
         creatorName: "Omar",
         creatorUrl: null,
+        startedAt: now,
+        startedLabel: "2026-04-06",
         summaryRaw: "robotics hardware",
         pledgedAmount: 180000,
         pledgedLabel: "$180,000",
@@ -130,6 +138,8 @@ describe("kickstarter source helpers", () => {
         campaignUrl: "https://www.kickstarter.com/projects/mei/echo-clip",
         creatorName: "Mei",
         creatorUrl: null,
+        startedAt: older,
+        startedLabel: "2026-04-05",
         summaryRaw: "voice device",
         pledgedAmount: 180000,
         pledgedLabel: "$180,000",
@@ -148,6 +158,8 @@ describe("kickstarter source helpers", () => {
         campaignUrl: "https://www.kickstarter.com/projects/jonah/framepilot",
         creatorName: "Jonah",
         creatorUrl: null,
+        startedAt: now,
+        startedLabel: "2026-04-06",
         summaryRaw: "video camera",
         pledgedAmount: null,
         pledgedLabel: "",

@@ -9,9 +9,13 @@ export type RefreshProgressStage =
   | "publish";
 
 export type RefreshRunStatusValue = "RUNNING" | "SUCCESS" | "FAILED";
+export type RefreshSource = "github" | "kickstarter" | "arxiv";
+export type RefreshTriggerKind = "manual" | "scheduled";
 
 export type RefreshStatusSnapshot = {
   runId: string;
+  trigger: string;
+  source: RefreshSource | null;
   status: RefreshRunStatusValue;
   progress: number;
   label: string;
@@ -21,6 +25,7 @@ export type RefreshStatusSnapshot = {
 };
 
 const REFRESH_PROGRESS_PREFIX = "progress::";
+const REFRESH_SOURCES = new Set<RefreshSource>(["github", "kickstarter", "arxiv"]);
 
 const STAGE_COPY: Record<RefreshProgressStage, { progress: number; label: string }> = {
   queued: { progress: 4, label: "准备刷新任务" },
@@ -35,6 +40,48 @@ const STAGE_COPY: Record<RefreshProgressStage, { progress: number; label: string
 
 function clampProgress(progress: number) {
   return Math.max(0, Math.min(100, Math.round(progress)));
+}
+
+export function buildRefreshTrigger(trigger: RefreshTriggerKind, source?: RefreshSource | null) {
+  return source ? `${trigger}:${source}` : trigger;
+}
+
+export function parseRefreshTrigger(trigger: string | null | undefined) {
+  const normalized = (trigger ?? "").trim();
+  const [kindCandidate, sourceCandidate] = normalized.split(":", 2);
+  const kind: RefreshTriggerKind = kindCandidate === "scheduled" ? "scheduled" : "manual";
+  const source = REFRESH_SOURCES.has(sourceCandidate as RefreshSource) ? (sourceCandidate as RefreshSource) : null;
+
+  return { kind, source };
+}
+
+export function getRefreshSourceLabel(source: RefreshSource | null | undefined) {
+  if (source === "github") {
+    return "GitHub";
+  }
+
+  if (source === "kickstarter") {
+    return "Kickstarter";
+  }
+
+  if (source === "arxiv") {
+    return "arXiv";
+  }
+
+  return "全量";
+}
+
+export function getRefreshTriggerLabel(trigger: string | null | undefined) {
+  const parsed = parseRefreshTrigger(trigger);
+  const sourceLabel = getRefreshSourceLabel(parsed.source);
+
+  return parsed.kind === "scheduled"
+    ? parsed.source
+      ? `${sourceLabel} 自动刷新`
+      : "自动刷新"
+    : parsed.source
+      ? `${sourceLabel} 手动刷新`
+      : "手动刷新";
 }
 
 export function getRefreshStageCopy(stage: RefreshProgressStage) {
@@ -99,15 +146,20 @@ export function decodeRefreshProgress(message: string | null | undefined, status
 
 export function toRefreshStatusSnapshot(run: {
   id: string;
+  trigger: string;
   status: RefreshRunStatusValue;
   message: string | null;
   startedAt: Date;
   finishedAt: Date | null;
 }) {
   const progress = decodeRefreshProgress(run.message, run.status);
+  const trigger = run.trigger;
+  const parsedTrigger = parseRefreshTrigger(trigger);
 
   return {
     runId: run.id,
+    trigger,
+    source: parsedTrigger.source,
     status: run.status,
     progress: progress.progress,
     label: progress.label,

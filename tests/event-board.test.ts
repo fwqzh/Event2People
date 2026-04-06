@@ -162,6 +162,7 @@ function createKickstarterSummaryEvent(overrides: Partial<EventSummaryView> = {}
     eventDetailSummaryZh: "这是一个面向开发者与创作者工具的 Kickstarter 项目，当前筹款 $240,000 / $50,000，状态 剩余 12 days。",
     metrics: [
       { label: "Pledged", value: "$240,000" },
+      { label: "Started", value: "2026-03-18" },
       { label: "Goal", value: "$50,000" },
       { label: "Backers", value: "3,200" },
       { label: "Days Left", value: "12 days" },
@@ -796,6 +797,8 @@ describe("EventBoard", () => {
       screen.getByRole("link", { name: "https://www.kickstarter.com/projects/lenaortiz/orbital-coder" }),
     ).toBeInTheDocument();
     expect(screen.getByText("Orbital Coder")).toBeInTheDocument();
+    expect(screen.getByText("2026-03-18")).toBeInTheDocument();
+    expect(screen.getByText("Started")).toBeInTheDocument();
   });
 
   it("shows pdf-extracted affiliations and contact emails on arxiv author cards", async () => {

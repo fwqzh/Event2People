@@ -1,7 +1,7 @@
 import { subDays, subHours } from "date-fns";
 
 import { buildPersonCopySummary } from "@/lib/copy";
-import { clampZh, repoDisplayName, sentenceZh } from "@/lib/text";
+import { clampZh, formatDay, repoDisplayName, sentenceZh } from "@/lib/text";
 import type { DatasetBundleInput, EventInput, EventTag, LinkItem, MetricItem, PipelineEntrySeedInput, PaperInput, PersonInput, ProjectInput } from "@/lib/types";
 
 function metrics(items: Array<[string, string]>): MetricItem[] {
@@ -527,6 +527,7 @@ export function buildSampleDataset(now = new Date()): DatasetBundleInput {
       timePrimary: subHours(now, 5),
       metrics: metrics([
         ["Pledged", "$240,000"],
+        ["Started", "2026-03-18"],
         ["Goal", "$50,000"],
         ["Backers", "3,200"],
         ["Days Left", "12 days"],
@@ -555,6 +556,7 @@ export function buildSampleDataset(now = new Date()): DatasetBundleInput {
       timePrimary: subHours(now, 7),
       metrics: metrics([
         ["Pledged", "$180,000"],
+        ["Started", "2026-03-16"],
         ["Goal", "$80,000"],
         ["Backers", "1,480"],
         ["Days Left", "9 days"],
@@ -583,6 +585,7 @@ export function buildSampleDataset(now = new Date()): DatasetBundleInput {
       timePrimary: subHours(now, 9),
       metrics: metrics([
         ["Pledged", "$120,000"],
+        ["Started", "2026-03-12"],
         ["Goal", "$45,000"],
         ["Backers", "1,920"],
         ["Days Left", "16 days"],
@@ -611,6 +614,7 @@ export function buildSampleDataset(now = new Date()): DatasetBundleInput {
       timePrimary: subHours(now, 12),
       metrics: metrics([
         ["Pledged", "$90,000"],
+        ["Started", "2026-03-21"],
         ["Goal", "$30,000"],
         ["Backers", "860"],
         ["Days Left", "6 days"],
@@ -721,6 +725,7 @@ export function buildSampleDataset(now = new Date()): DatasetBundleInput {
       timePrimary: subHours(now, 12 + index * 2),
       metrics: metrics([
         ["Pledged", `$${pledged.toLocaleString("en-US")}`],
+        ["Started", formatDay(subDays(now, 14 + index))],
         ["Goal", `$${goal.toLocaleString("en-US")}`],
         ["Backers", `${Math.max(backers, 180)}`],
         ["Days Left", `${6 + index} days`],

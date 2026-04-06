@@ -144,6 +144,7 @@ export type DatasetBundleInput = {
   repoPaperLinks: RepoPaperLinkInput[];
   events: EventInput[];
   pipelineEntries?: PipelineEntrySeedInput[];
+  eventPersonContributionCountsByEvent?: Record<string, Record<string, number>>;
 };
 
 export type PersonView = PersonInput & {

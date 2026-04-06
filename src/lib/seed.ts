@@ -19,6 +19,12 @@ function getGitHubContributionCount(
   event: DatasetBundleInput["events"][number],
   personStableId: string,
 ) {
+  const explicitContributionCount = bundle.eventPersonContributionCountsByEvent?.[event.stableId]?.[personStableId];
+
+  if (typeof explicitContributionCount === "number") {
+    return explicitContributionCount;
+  }
+
   if (event.sourceType !== "github") {
     return 0;
   }
