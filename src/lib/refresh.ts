@@ -8,9 +8,11 @@ import { shouldMergePeople } from "@/lib/merge-people";
 import { enrichBundleWithOpenAI } from "@/lib/openai-enrichment";
 import { buildPaperExplanationZh } from "@/lib/paper-copy";
 import {
+  buildRefreshTrigger,
   buildRefreshRangeProgress,
   buildRefreshStageMessage,
   getRefreshStageCopy,
+  type RefreshSource,
   toRefreshStatusSnapshot,
 } from "@/lib/refresh-progress";
 import { decideRepoPaperLink } from "@/lib/repo-paper-linking";
@@ -188,6 +190,75 @@ type KickstarterFallbackEventRecord = Prisma.EventGetPayload<{
       };
       include: {
         person: true;
+      };
+    };
+  };
+}>;
+
+type StoredPersonRecord = {
+  stableId: string;
+  name: string;
+  identitySummaryZh: string;
+  evidenceSummaryZh: string;
+  sourceUrlsJson: Prisma.JsonValue;
+  githubUrl: string | null;
+  scholarUrl: string | null;
+  linkedinUrl: string | null;
+  xUrl: string | null;
+  homepageUrl: string | null;
+  email: string | null;
+  organizationNamesRaw: Prisma.JsonValue | null;
+  schoolNamesRaw: Prisma.JsonValue | null;
+  labNamesRaw: Prisma.JsonValue | null;
+  bioSnippetsRaw: Prisma.JsonValue | null;
+  founderHistoryRaw: Prisma.JsonValue | null;
+};
+
+type StoredRepoPaperLinkRecord = Prisma.RepoPaperLinkGetPayload<{
+  include: {
+    project: {
+      select: {
+        stableId: true;
+      };
+    };
+    paper: {
+      select: {
+        stableId: true;
+      };
+    };
+  };
+}>;
+
+type StoredActiveEventRecord = Prisma.EventGetPayload<{
+  include: {
+    projectLinks: {
+      include: {
+        project: {
+          select: {
+            stableId: true;
+          };
+        };
+      };
+    };
+    paperLinks: {
+      include: {
+        paper: {
+          select: {
+            stableId: true;
+          };
+        };
+      };
+    };
+    personLinks: {
+      orderBy: {
+        position: "asc";
+      };
+      include: {
+        person: {
+          select: {
+            stableId: true;
+          };
+        };
       };
     };
   };
@@ -862,6 +933,424 @@ export async function loadKickstarterCampaignsForRefresh(
   }
 }
 
+function mapStoredPersonToInput(person: StoredPersonRecord): PersonInput {
+  return {
+    stableId: person.stableId,
+    name: person.name,
+    identitySummaryZh: person.identitySummaryZh,
+    evidenceSummaryZh: person.evidenceSummaryZh,
+    sourceUrls: readStringArray(person.sourceUrlsJson),
+    githubUrl: person.githubUrl,
+    scholarUrl: person.scholarUrl,
+    linkedinUrl: person.linkedinUrl,
+    xUrl: person.xUrl,
+    homepageUrl: person.homepageUrl,
+    email: person.email,
+    organizationNamesRaw: readStringArray(person.organizationNamesRaw),
+    schoolNamesRaw: readStringArray(person.schoolNamesRaw),
+    labNamesRaw: readStringArray(person.labNamesRaw),
+    bioSnippetsRaw: readStringArray(person.bioSnippetsRaw),
+    founderHistoryRaw: readStringArray(person.founderHistoryRaw),
+  };
+}
+
+function mapStoredRepoPaperLinkToInput(record: StoredRepoPaperLinkRecord): RepoPaperLinkInput {
+  return {
+    projectStableId: record.project.stableId,
+    paperStableId: record.paper.stableId,
+    evidenceType: record.evidenceType,
+    evidenceSourceUrl: record.evidenceSourceUrl,
+    evidenceExcerpt: record.evidenceExcerpt,
+    confidence: record.confidence === "confirmed" ? "confirmed" : "candidate",
+  };
+}
+
+function mapStoredEventToInput(event: StoredActiveEventRecord): EventInput {
+  return {
+    stableId: event.stableId,
+    sourceType: event.sourceType,
+    eventType: event.eventType,
+    eventTag: event.eventTag as EventInput["eventTag"],
+    eventTagConfidence: event.eventTagConfidence,
+    eventTitleZh: event.eventTitleZh,
+    eventHighlightZh: event.eventHighlightZh,
+    eventDetailSummaryZh: event.eventDetailSummaryZh ?? null,
+    timePrimary: event.timePrimary,
+    metrics: parseMetrics(event.metricsJson),
+    sourceLinks: parseLinks(event.sourceLinksJson),
+    peopleDetectionStatus: event.peopleDetectionStatus,
+    projectStableIds: event.projectLinks.map((projectLink) => projectLink.project.stableId),
+    paperStableIds: event.paperLinks.map((paperLink) => paperLink.paper.stableId),
+    personStableIds: event.personLinks.map((personLink) => personLink.person.stableId),
+    displayRank: event.displayRank,
+    relatedRepoCount: event.relatedRepoCount,
+    relatedPaperCount: event.relatedPaperCount,
+  };
+}
+
+async function loadActiveDatasetBundle(prisma: PrismaClient): Promise<DatasetBundleInput | null> {
+  const activeDataset = await prisma.datasetVersion.findFirst({
+    where: { status: "ACTIVE" },
+    orderBy: { publishedAt: "desc" },
+    select: { id: true },
+  });
+
+  if (!activeDataset) {
+    return null;
+  }
+
+  const [projects, papers, people, repoPaperLinks, events, pipelineEntries] = await Promise.all([
+    prisma.project.findMany({
+      where: { datasetVersionId: activeDataset.id },
+      orderBy: [{ stars: "desc" }, { repoUpdatedAt: "desc" }],
+      select: {
+        stableId: true,
+        repoName: true,
+        repoUrl: true,
+        ownerName: true,
+        ownerUrl: true,
+        stars: true,
+        starDelta7d: true,
+        contributorsCount: true,
+        repoCreatedAt: true,
+        repoUpdatedAt: true,
+        repoDescriptionRaw: true,
+        readmeExcerptRaw: true,
+        relatedPaperIdsJson: true,
+      },
+    }),
+    prisma.paper.findMany({
+      where: { datasetVersionId: activeDataset.id },
+      orderBy: { publishedAt: "desc" },
+      select: {
+        stableId: true,
+        paperTitle: true,
+        paperUrl: true,
+        authorsJson: true,
+        authorsCount: true,
+        publishedAt: true,
+        abstractRaw: true,
+        pdfTextRaw: true,
+        codeUrl: true,
+        authorEmailsRaw: true,
+        institutionNamesRaw: true,
+        relatedProjectIds: true,
+      },
+    }),
+    prisma.person.findMany({
+      where: { datasetVersionId: activeDataset.id },
+      select: {
+        stableId: true,
+        name: true,
+        identitySummaryZh: true,
+        evidenceSummaryZh: true,
+        sourceUrlsJson: true,
+        githubUrl: true,
+        scholarUrl: true,
+        linkedinUrl: true,
+        xUrl: true,
+        homepageUrl: true,
+        email: true,
+        organizationNamesRaw: true,
+        schoolNamesRaw: true,
+        labNamesRaw: true,
+        bioSnippetsRaw: true,
+        founderHistoryRaw: true,
+      },
+    }),
+    prisma.repoPaperLink.findMany({
+      where: { datasetVersionId: activeDataset.id },
+      include: {
+        project: {
+          select: {
+            stableId: true,
+          },
+        },
+        paper: {
+          select: {
+            stableId: true,
+          },
+        },
+      },
+    }),
+    prisma.event.findMany({
+      where: { datasetVersionId: activeDataset.id },
+      orderBy: [{ sourceType: "asc" }, { displayRank: "asc" }],
+      include: {
+        projectLinks: {
+          include: {
+            project: {
+              select: {
+                stableId: true,
+              },
+            },
+          },
+        },
+        paperLinks: {
+          include: {
+            paper: {
+              select: {
+                stableId: true,
+              },
+            },
+          },
+        },
+        personLinks: {
+          orderBy: { position: "asc" },
+          include: {
+            person: {
+              select: {
+                stableId: true,
+              },
+            },
+          },
+        },
+      },
+    }),
+    prisma.pipelineEntry.findMany({
+      orderBy: [{ savedAt: "desc" }, { personStableId: "asc" }],
+    }),
+  ]);
+
+  return {
+    label: "Active dataset",
+    source: "active",
+    projects: projects.map(mapStoredProjectToInput),
+    papers: papers.map(mapStoredPaperToInput),
+    people: people.map(mapStoredPersonToInput),
+    repoPaperLinks: repoPaperLinks.map(mapStoredRepoPaperLinkToInput),
+    events: events.map(mapStoredEventToInput),
+    pipelineEntries: pipelineEntries.map((entry) => ({
+      personStableId: entry.personStableId,
+      savedAt: entry.savedAt,
+      savedFromEventStableId: entry.savedFromEventStableId,
+      savedFromEventTitle: entry.savedFromEventTitle,
+      recentActivitySummaryZh: entry.recentActivitySummaryZh,
+      copySummaryShortZh: entry.copySummaryShortZh ?? undefined,
+      copySummaryFullZh: entry.copySummaryFullZh ?? undefined,
+      status: entry.status ?? undefined,
+      lastContactedAt: entry.lastContactedAt ?? undefined,
+      notes: entry.notes ?? undefined,
+    })),
+    eventPersonContributionCountsByEvent: Object.fromEntries(
+      events.map((event) => [
+        event.stableId,
+        Object.fromEntries(event.personLinks.map((personLink) => [personLink.person.stableId, personLink.contributionCount])),
+      ]),
+    ),
+  };
+}
+
+function remapEventPersonContributionCountsByEvent(
+  counts: DatasetBundleInput["eventPersonContributionCountsByEvent"],
+  stableIdMap: Map<string, string>,
+) {
+  if (!counts) {
+    return undefined;
+  }
+
+  return Object.fromEntries(
+    Object.entries(counts).map(([eventStableId, eventCounts]) => [
+      eventStableId,
+      Object.entries(eventCounts).reduce<Record<string, number>>((accumulator, [personStableId, contributionCount]) => {
+        const nextStableId = stableIdMap.get(personStableId) ?? personStableId;
+        accumulator[nextStableId] = Math.max(accumulator[nextStableId] ?? 0, contributionCount);
+        return accumulator;
+      }, {}),
+    ]),
+  );
+}
+
+function remapPipelineEntries(
+  entries: DatasetBundleInput["pipelineEntries"],
+  stableIdMap: Map<string, string>,
+) {
+  if (!entries || entries.length === 0) {
+    return undefined;
+  }
+
+  const deduped = new Map<string, NonNullable<DatasetBundleInput["pipelineEntries"]>[number]>();
+
+  for (const entry of entries) {
+    const nextPersonStableId = stableIdMap.get(entry.personStableId) ?? entry.personStableId;
+
+    if (!deduped.has(nextPersonStableId)) {
+      deduped.set(nextPersonStableId, {
+        ...entry,
+        personStableId: nextPersonStableId,
+      });
+    }
+  }
+
+  return [...deduped.values()];
+}
+
+function collectPeopleForEvents(
+  events: EventInput[],
+  options: {
+    activePeople?: PersonInput[];
+    extraPeople?: PersonInput[];
+    requiredPersonIds?: string[];
+  } = {},
+) {
+  const peopleByStableId = new Map<string, PersonInput>();
+
+  for (const person of options.activePeople ?? []) {
+    peopleByStableId.set(person.stableId, person);
+  }
+
+  for (const person of options.extraPeople ?? []) {
+    peopleByStableId.set(person.stableId, person);
+  }
+
+  const orderedPersonIds = uniqueStrings([
+    ...events.flatMap((event) => event.personStableIds),
+    ...(options.requiredPersonIds ?? []),
+  ]);
+
+  return orderedPersonIds
+    .map((personStableId) => peopleByStableId.get(personStableId))
+    .filter((person): person is PersonInput => Boolean(person));
+}
+
+function createDatasetBundle(options: {
+  label: string;
+  source: string;
+  projects: ProjectInput[];
+  papers: PaperInput[];
+  people: PersonInput[];
+  repoPaperLinks: RepoPaperLinkInput[];
+  events?: EventInput[];
+  githubEvents?: EventInput[];
+  kickstarterEvents?: EventInput[];
+  arxivEvents?: EventInput[];
+  pipelineEntries?: DatasetBundleInput["pipelineEntries"];
+  eventPersonContributionCountsByEvent?: DatasetBundleInput["eventPersonContributionCountsByEvent"];
+}): DatasetBundleInput {
+  const mergedPeople = mergePeopleConservatively(options.people);
+  const orderedEvents = options.events ?? [
+    ...(options.githubEvents ?? []),
+    ...(options.kickstarterEvents ?? []),
+    ...(options.arxivEvents ?? []),
+  ];
+  const remappedEvents = orderedEvents.map((event) => ({
+    ...event,
+    personStableIds: remapPersonStableIds(event.personStableIds, mergedPeople.stableIdMap),
+  }));
+
+  return {
+    label: options.label,
+    source: options.source,
+    projects: options.projects,
+    papers: options.papers,
+    people: mergedPeople.people,
+    repoPaperLinks: options.repoPaperLinks,
+    events: remappedEvents,
+    pipelineEntries: remapPipelineEntries(options.pipelineEntries, mergedPeople.stableIdMap),
+    eventPersonContributionCountsByEvent: remapEventPersonContributionCountsByEvent(
+      options.eventPersonContributionCountsByEvent,
+      mergedPeople.stableIdMap,
+    ),
+  };
+}
+
+function patchGitHubEvents(
+  events: EventInput[],
+  projectByStableId: Map<string, ProjectInput>,
+  paperByStableId: Map<string, PaperInput>,
+  confirmedLinksByProject: Map<string, RepoPaperLinkInput[]>,
+) {
+  return events
+    .map((event) => {
+      const projectStableId = event.projectStableIds[0];
+
+      if (!projectStableId) {
+        return null;
+      }
+
+      const project = projectByStableId.get(projectStableId);
+
+      if (!project) {
+        return null;
+      }
+
+      const linkedPaper = (confirmedLinksByProject.get(projectStableId) ?? [])
+        .map((repoPaperLink) => paperByStableId.get(repoPaperLink.paperStableId))
+        .find(Boolean);
+      const preservedSourceLinks = event.sourceLinks.filter((sourceLink) => sourceLink.label !== "GitHub" && sourceLink.label !== "Paper");
+
+      return {
+        ...event,
+        eventType: linkedPaper ? "implementation" : project.repoCreatedAt > subDays(new Date(), 7) ? "new_repo" : "activity_spike",
+        sourceLinks: uniqueLinkItems([
+          link("GitHub", project.repoUrl),
+          ...(linkedPaper ? [link("Paper", linkedPaper.paperUrl)] : []),
+          ...preservedSourceLinks,
+        ]),
+        projectStableIds: [projectStableId],
+        paperStableIds: linkedPaper ? [linkedPaper.stableId] : [],
+        relatedRepoCount: 1,
+        relatedPaperCount: linkedPaper ? 1 : 0,
+      } satisfies EventInput;
+    })
+    .filter(Boolean) as EventInput[];
+}
+
+function patchArxivEvents(
+  events: EventInput[],
+  paperByStableId: Map<string, PaperInput>,
+  confirmedLinksByPaper: Map<string, RepoPaperLinkInput[]>,
+) {
+  return events
+    .map((event) => {
+      const paperStableId = event.paperStableIds[0];
+
+      if (!paperStableId) {
+        return null;
+      }
+
+      const paper = paperByStableId.get(paperStableId);
+
+      if (!paper) {
+        return null;
+      }
+
+      const linkedProjects = confirmedLinksByPaper.get(paperStableId) ?? [];
+      const nextEventType = linkedProjects.length > 0 ? (paper.codeUrl ? "paper_with_code" : "implementation") : "new_paper";
+
+      return {
+        ...event,
+        eventType: nextEventType,
+        eventTitleZh: clampZh(
+          nextEventType === "new_paper" ? `新 paper “${paper.paperTitle}” 发布` : `Paper “${paper.paperTitle}” 已连接代码`,
+          32,
+        ),
+        eventHighlightZh: sentenceZh(
+          nextEventType === "new_paper" ? "相关论文流中出现新的研究入口。" : "研究入口已经连接到更可执行的实现。",
+          20,
+        ),
+        timePrimary: paper.publishedAt,
+        metrics: [
+          metric("时间", "近期"),
+          metric("authors", String(paper.authorsCount)),
+          metric("code", linkedProjects.length > 0 || paper.codeUrl ? "有" : "无"),
+        ],
+        sourceLinks: uniqueLinkItems([
+          link("Paper", paper.paperUrl),
+          ...(paper.semanticScholarUrl ? [link("Semantic Scholar", paper.semanticScholarUrl)] : []),
+          ...(paper.codeUrl ? [link("Code", paper.codeUrl)] : []),
+        ]),
+        peopleDetectionStatus: paper.authors.length > 0 ? "partial" : "missing",
+        projectStableIds: linkedProjects.map((repoPaperLink) => repoPaperLink.projectStableId),
+        paperStableIds: [paperStableId],
+        personStableIds: paper.authors.map((authorName) => `author:${slugify(authorName)}`),
+        relatedRepoCount: linkedProjects.length,
+        relatedPaperCount: 1,
+      } satisfies EventInput;
+    })
+    .filter(Boolean) as EventInput[];
+}
+
 function buildLiveDatasetBundle(
   githubProjects: ProjectInput[],
   papers: PaperInput[],
@@ -873,21 +1362,40 @@ function buildLiveDatasetBundle(
   const confirmedLinkIndex = buildConfirmedLinkIndex(repoPaperLinks);
   const githubEvents = buildGitHubEvents(githubProjects, paperByStableId, confirmedLinkIndex.byProject);
   const arxivEvents = buildArxivEvents(papers, confirmedLinkIndex.byPaper);
-  const mergedPeople = mergePeopleConservatively(people);
-  const remappedEvents = [...githubEvents, ...extraEvents, ...arxivEvents].map((event) => ({
-    ...event,
-    personStableIds: remapPersonStableIds(event.personStableIds, mergedPeople.stableIdMap),
-  }));
-
-  return {
+  return createDatasetBundle({
     label: "Live refresh",
     source: "refresh",
     projects: githubProjects,
     papers,
-    people: mergedPeople.people,
+    people,
     repoPaperLinks,
-    events: remappedEvents,
-  };
+    githubEvents,
+    kickstarterEvents: extraEvents,
+    arxivEvents,
+  });
+}
+
+function getEventsForSource(bundle: DatasetBundleInput | null, source: EventInput["sourceType"]) {
+  return (bundle?.events ?? []).filter((event) => event.sourceType === source);
+}
+
+function pickContributionCountsBySource(
+  bundle: DatasetBundleInput | null,
+  sources: EventInput["sourceType"][],
+) {
+  const allowedEventIds = new Set(
+    (bundle?.events ?? [])
+      .filter((event) => sources.includes(event.sourceType))
+      .map((event) => event.stableId),
+  );
+
+  if (allowedEventIds.size === 0) {
+    return undefined;
+  }
+
+  return Object.fromEntries(
+    Object.entries(bundle?.eventPersonContributionCountsByEvent ?? {}).filter(([eventStableId]) => allowedEventIds.has(eventStableId)),
+  );
 }
 
 async function recoverStaleRefreshRuns(prisma: PrismaClient) {
@@ -915,7 +1423,7 @@ async function updateRefreshProgress(prisma: PrismaClient, refreshRunId: string,
   });
 }
 
-async function createRefreshRun(prisma: PrismaClient, trigger: "manual" | "scheduled") {
+async function createRefreshRun(prisma: PrismaClient, trigger: "manual" | "scheduled", source?: RefreshSource) {
   await recoverStaleRefreshRuns(prisma);
 
   const running = await prisma.refreshRun.findFirst({
@@ -938,7 +1446,7 @@ async function createRefreshRun(prisma: PrismaClient, trigger: "manual" | "sched
   const run = await prisma.refreshRun.create({
     data: {
       id: refreshRunId,
-      trigger,
+      trigger: buildRefreshTrigger(trigger, source),
       status: "RUNNING",
       startedAt,
       message: buildRefreshStageMessage("queued"),
@@ -952,46 +1460,59 @@ async function createRefreshRun(prisma: PrismaClient, trigger: "manual" | "sched
   };
 }
 
-async function executeRefreshRun(prisma: PrismaClient, refreshRunId: string, datasetVersionId: string) {
+async function executeRefreshRun(
+  prisma: PrismaClient,
+  refreshRunId: string,
+  datasetVersionId: string,
+  source?: RefreshSource,
+) {
   try {
+    const activeBundle = await loadActiveDatasetBundle(prisma);
+    const pipelineEntries = activeBundle?.pipelineEntries;
+    const requiredPersonIds = pipelineEntries?.map((entry) => entry.personStableId) ?? [];
+
     await updateRefreshProgress(prisma, refreshRunId, buildRefreshStageMessage("ingest"));
 
-    const [githubResult, kickstarterResult, arxivResult] = await Promise.all([
-      loadGitHubProjectsForRefresh(prisma, GITHUB_REFRESH_FETCH_LIMIT),
-      loadKickstarterCampaignsForRefresh(prisma, KICKSTARTER_REFRESH_FETCH_LIMIT),
-      loadArxivPapersForRefresh(prisma, ARXIV_ACTIVE_POOL_LIMIT),
-    ]);
-    const sourceWarnings = [githubResult.warning, kickstarterResult.warning, arxivResult.warning].filter(
-      (warning): warning is string => Boolean(warning),
-    );
+    let bundle: DatasetBundleInput;
+    let sourceWarnings: string[] = [];
+    let aiEventLimit = AI_EVENT_ENRICH_LIMIT;
 
-    await updateRefreshProgress(prisma, refreshRunId, buildRefreshStageMessage("normalize"));
+    if (!source) {
+      const [githubResult, kickstarterResult, arxivResult] = await Promise.all([
+        loadGitHubProjectsForRefresh(prisma, GITHUB_REFRESH_FETCH_LIMIT),
+        loadKickstarterCampaignsForRefresh(prisma, KICKSTARTER_REFRESH_FETCH_LIMIT),
+        loadArxivPapersForRefresh(prisma, ARXIV_ACTIVE_POOL_LIMIT),
+      ]);
+      sourceWarnings = [githubResult.warning, kickstarterResult.warning, arxivResult.warning].filter(
+        (warning): warning is string => Boolean(warning),
+      );
 
-    const githubProjectsBase = githubResult.projects;
-    const githubProjects =
-      githubProjectsBase.length > 0
-        ? await enrichGitHubProjectsWithNarrativeContext(githubProjectsBase, async ({ completed, total, repoName }) => {
-            const progress = buildRefreshRangeProgress(28, 38, completed, total);
-            await updateRefreshProgress(
-              prisma,
-              refreshRunId,
-              buildRefreshStageMessage("normalize", `补充 GitHub 中文互联网语境 (${completed}/${total}) · ${repoName}`).replace(
-                "progress::28",
-                `progress::${progress}`,
-              ),
-            );
-          })
-        : githubProjectsBase;
-    const papers = arxivResult.papers;
-    const ownerCount = countGitHubPeopleCandidates(githubProjects);
+      await updateRefreshProgress(prisma, refreshRunId, buildRefreshStageMessage("normalize"));
 
-    await updateRefreshProgress(
-      prisma,
-      refreshRunId,
-      buildRefreshStageMessage("people", ownerCount > 0 ? `0/${ownerCount}` : undefined),
-    );
+      const githubProjectsBase = githubResult.projects;
+      const githubProjects =
+        githubProjectsBase.length > 0
+          ? await enrichGitHubProjectsWithNarrativeContext(githubProjectsBase, async ({ completed, total, repoName }) => {
+              const progress = buildRefreshRangeProgress(28, 38, completed, total);
+              await updateRefreshProgress(
+                prisma,
+                refreshRunId,
+                buildRefreshStageMessage("normalize", `补充 GitHub 中文互联网语境 (${completed}/${total}) · ${repoName}`).replace(
+                  "progress::28",
+                  `progress::${progress}`,
+                ),
+              );
+            })
+          : githubProjectsBase;
+      const papers = arxivResult.papers;
+      const ownerCount = countGitHubPeopleCandidates(githubProjects);
 
-    const people = await (async () => {
+      await updateRefreshProgress(
+        prisma,
+        refreshRunId,
+        buildRefreshStageMessage("people", ownerCount > 0 ? `0/${ownerCount}` : undefined),
+      );
+
       const githubOwners = await enrichGitHubOwners(githubProjects, async ({ completed, total }) => {
         const progress = buildRefreshRangeProgress(getRefreshStageCopy("people").progress, 58, completed, total);
         await updateRefreshProgress(
@@ -1005,22 +1526,173 @@ async function executeRefreshRun(prisma: PrismaClient, refreshRunId: string, dat
         .map((name) => personFromAuthor(name))
         .filter((person) => !githubOwnerIds.has(person.stableId));
 
-      return [...githubOwners, ...authorPeople, ...kickstarterResult.people];
-    })();
+      await updateRefreshProgress(prisma, refreshRunId, buildRefreshStageMessage("link"));
+      const repoPaperLinks = buildRepoPaperLinks(githubProjects, papers);
+      const paperByStableId = new Map(papers.map((paper) => [paper.stableId, paper]));
+      const confirmedLinkIndex = buildConfirmedLinkIndex(repoPaperLinks);
+      const githubEvents = buildGitHubEvents(githubProjects, paperByStableId, confirmedLinkIndex.byProject);
+      const arxivEvents = buildArxivEvents(papers, confirmedLinkIndex.byPaper);
+      const orderedEvents = [...githubEvents, ...kickstarterResult.events, ...arxivEvents];
+      const people = collectPeopleForEvents(orderedEvents, {
+        activePeople: activeBundle?.people,
+        extraPeople: [...githubOwners, ...authorPeople, ...kickstarterResult.people],
+        requiredPersonIds,
+      });
 
-    await updateRefreshProgress(prisma, refreshRunId, buildRefreshStageMessage("link"));
-    const repoPaperLinks = buildRepoPaperLinks(githubProjects, papers);
+      bundle =
+        githubProjects.length > 0 || papers.length > 0 || kickstarterResult.events.length > 0
+          ? createDatasetBundle({
+              label: "Live refresh",
+              source: "refresh",
+              projects: githubProjects,
+              papers,
+              people,
+              repoPaperLinks,
+              events: orderedEvents,
+              pipelineEntries,
+            })
+          : buildSampleDataset();
+    } else if (source === "github") {
+      const githubResult = await loadGitHubProjectsForRefresh(prisma, GITHUB_REFRESH_FETCH_LIMIT);
+      sourceWarnings = [githubResult.warning].filter((warning): warning is string => Boolean(warning));
 
-    const bundle =
-      githubProjects.length > 0 || papers.length > 0 || kickstarterResult.events.length > 0
-        ? buildLiveDatasetBundle(githubProjects, papers, people, repoPaperLinks, kickstarterResult.events)
-        : buildSampleDataset();
+      await updateRefreshProgress(prisma, refreshRunId, buildRefreshStageMessage("normalize"));
+
+      const githubProjectsBase = githubResult.projects;
+      const githubProjects =
+        githubProjectsBase.length > 0
+          ? await enrichGitHubProjectsWithNarrativeContext(githubProjectsBase, async ({ completed, total, repoName }) => {
+              const progress = buildRefreshRangeProgress(28, 38, completed, total);
+              await updateRefreshProgress(
+                prisma,
+                refreshRunId,
+                buildRefreshStageMessage("normalize", `补充 GitHub 中文互联网语境 (${completed}/${total}) · ${repoName}`).replace(
+                  "progress::28",
+                  `progress::${progress}`,
+                ),
+              );
+            })
+          : githubProjectsBase;
+      const papers = activeBundle?.papers ?? [];
+      const ownerCount = countGitHubPeopleCandidates(githubProjects);
+
+      await updateRefreshProgress(
+        prisma,
+        refreshRunId,
+        buildRefreshStageMessage("people", ownerCount > 0 ? `0/${ownerCount}` : undefined),
+      );
+
+      const githubOwners = await enrichGitHubOwners(githubProjects, async ({ completed, total }) => {
+        const progress = buildRefreshRangeProgress(getRefreshStageCopy("people").progress, 58, completed, total);
+        await updateRefreshProgress(
+          prisma,
+          refreshRunId,
+          buildRefreshStageMessage("people", `${completed}/${total}`).replace("progress::40", `progress::${progress}`),
+        );
+      });
+
+      await updateRefreshProgress(prisma, refreshRunId, buildRefreshStageMessage("link"));
+      const repoPaperLinks = buildRepoPaperLinks(githubProjects, papers);
+      const paperByStableId = new Map(papers.map((paper) => [paper.stableId, paper]));
+      const confirmedLinkIndex = buildConfirmedLinkIndex(repoPaperLinks);
+      const githubEvents = buildGitHubEvents(githubProjects, paperByStableId, confirmedLinkIndex.byProject);
+      const arxivEvents = patchArxivEvents(getEventsForSource(activeBundle, "arxiv"), paperByStableId, confirmedLinkIndex.byPaper);
+      const kickstarterEvents = getEventsForSource(activeBundle, "kickstarter");
+      const orderedEvents = [...githubEvents, ...kickstarterEvents, ...arxivEvents];
+      const people = collectPeopleForEvents(orderedEvents, {
+        activePeople: activeBundle?.people,
+        extraPeople: githubOwners,
+        requiredPersonIds,
+      });
+
+      bundle = createDatasetBundle({
+        label: "GitHub refresh",
+        source: "refresh:github",
+        projects: githubProjects,
+        papers,
+        people,
+        repoPaperLinks,
+        events: orderedEvents,
+        pipelineEntries,
+        eventPersonContributionCountsByEvent: pickContributionCountsBySource(activeBundle, ["arxiv", "kickstarter"]),
+      });
+      aiEventLimit = githubEvents.length;
+    } else if (source === "arxiv") {
+      const arxivResult = await loadArxivPapersForRefresh(prisma, ARXIV_ACTIVE_POOL_LIMIT);
+      sourceWarnings = [arxivResult.warning].filter((warning): warning is string => Boolean(warning));
+
+      await updateRefreshProgress(prisma, refreshRunId, buildRefreshStageMessage("normalize"));
+
+      const githubProjects = activeBundle?.projects ?? [];
+      const papers = arxivResult.papers;
+
+      await updateRefreshProgress(prisma, refreshRunId, buildRefreshStageMessage("people", "复用现有人物并生成作者"));
+
+      const authorPeople = uniqueStrings(papers.flatMap((paper) => paper.authors)).map((name) => personFromAuthor(name));
+
+      await updateRefreshProgress(prisma, refreshRunId, buildRefreshStageMessage("link"));
+      const repoPaperLinks = buildRepoPaperLinks(githubProjects, papers);
+      const projectByStableId = new Map(githubProjects.map((project) => [project.stableId, project]));
+      const paperByStableId = new Map(papers.map((paper) => [paper.stableId, paper]));
+      const confirmedLinkIndex = buildConfirmedLinkIndex(repoPaperLinks);
+      const githubEvents = patchGitHubEvents(getEventsForSource(activeBundle, "github"), projectByStableId, paperByStableId, confirmedLinkIndex.byProject);
+      const kickstarterEvents = getEventsForSource(activeBundle, "kickstarter");
+      const arxivEvents = buildArxivEvents(papers, confirmedLinkIndex.byPaper);
+      const orderedEvents = [...arxivEvents, ...githubEvents, ...kickstarterEvents];
+      const people = collectPeopleForEvents(orderedEvents, {
+        activePeople: activeBundle?.people,
+        extraPeople: authorPeople,
+        requiredPersonIds,
+      });
+
+      bundle = createDatasetBundle({
+        label: "arXiv refresh",
+        source: "refresh:arxiv",
+        projects: githubProjects,
+        papers,
+        people,
+        repoPaperLinks,
+        events: orderedEvents,
+        pipelineEntries,
+        eventPersonContributionCountsByEvent: pickContributionCountsBySource(activeBundle, ["github", "kickstarter"]),
+      });
+      aiEventLimit = arxivEvents.length;
+    } else {
+      const kickstarterResult = await loadKickstarterCampaignsForRefresh(prisma, KICKSTARTER_REFRESH_FETCH_LIMIT);
+      sourceWarnings = [kickstarterResult.warning].filter((warning): warning is string => Boolean(warning));
+
+      await updateRefreshProgress(prisma, refreshRunId, buildRefreshStageMessage("normalize"));
+
+      const githubEvents = getEventsForSource(activeBundle, "github");
+      const arxivEvents = getEventsForSource(activeBundle, "arxiv");
+      const orderedEvents = [...kickstarterResult.events, ...githubEvents, ...arxivEvents];
+      const people = collectPeopleForEvents(orderedEvents, {
+        activePeople: activeBundle?.people,
+        extraPeople: kickstarterResult.people,
+        requiredPersonIds,
+      });
+
+      await updateRefreshProgress(prisma, refreshRunId, buildRefreshStageMessage("link", "保留现有 repo-paper 关系"));
+
+      bundle = createDatasetBundle({
+        label: "Kickstarter refresh",
+        source: "refresh:kickstarter",
+        projects: activeBundle?.projects ?? [],
+        papers: activeBundle?.papers ?? [],
+        people,
+        repoPaperLinks: activeBundle?.repoPaperLinks ?? [],
+        events: orderedEvents,
+        pipelineEntries,
+        eventPersonContributionCountsByEvent: pickContributionCountsBySource(activeBundle, ["github", "arxiv"]),
+      });
+      aiEventLimit = kickstarterResult.events.length;
+    }
 
     await updateRefreshProgress(prisma, refreshRunId, buildRefreshStageMessage("ai"));
 
     const aiResult = await enrichBundleWithOpenAI(bundle, {
       enrichPeople: false,
-      eventLimit: AI_EVENT_ENRICH_LIMIT,
+      eventLimit: aiEventLimit,
       onProgress: async ({ phase, completedItems, totalItems }) => {
         const progress = phase === "events"
           ? buildRefreshRangeProgress(getRefreshStageCopy("ai").progress, 89, completedItems, totalItems)
@@ -1106,22 +1778,30 @@ async function executeRefreshRun(prisma: PrismaClient, refreshRunId: string, dat
   }
 }
 
-export async function runRefresh(prisma: PrismaClient, trigger: "manual" | "scheduled" = "manual") {
-  const created = await createRefreshRun(prisma, trigger);
+export async function runRefresh(
+  prisma: PrismaClient,
+  trigger: "manual" | "scheduled" = "manual",
+  source?: RefreshSource,
+) {
+  const created = await createRefreshRun(prisma, trigger, source);
 
   if (!created.started || !created.datasetVersionId) {
     throw new Error("已有刷新任务正在运行");
   }
 
-  return executeRefreshRun(prisma, created.run.id, created.datasetVersionId);
+  return executeRefreshRun(prisma, created.run.id, created.datasetVersionId, source);
 }
 
-export async function kickoffRefresh(prisma: PrismaClient, trigger: "manual" | "scheduled" = "manual") {
-  const created = await createRefreshRun(prisma, trigger);
+export async function kickoffRefresh(
+  prisma: PrismaClient,
+  trigger: "manual" | "scheduled" = "manual",
+  source?: RefreshSource,
+) {
+  const created = await createRefreshRun(prisma, trigger, source);
 
   if (created.started && created.datasetVersionId) {
     setTimeout(() => {
-      void executeRefreshRun(prisma, created.run.id, created.datasetVersionId!).catch((error) => {
+      void executeRefreshRun(prisma, created.run.id, created.datasetVersionId!, source).catch((error) => {
         console.warn("background refresh failed:", error instanceof Error ? error.message : "unknown error");
       });
     }, 0);

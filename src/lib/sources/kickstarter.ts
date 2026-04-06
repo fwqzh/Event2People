@@ -6,7 +6,7 @@ import { clampPlainText } from "@/lib/text";
 const SEARCH_REQUEST_TIMEOUT_MS = 6_000;
 const TAVILY_COUNTRY = "United States";
 const NEGATIVE_QUERY_SUFFIX = '-"board game" -tabletop -comic -film -book';
-const QUERY_BUCKETS = [
+const QUERY_BUCKETS: ReadonlyArray<{ query: string; timeRange: "week" | "month" }> = [
   {
     query: `site:kickstarter.com/projects/ robotics Kickstarter ${NEGATIVE_QUERY_SUFFIX}`,
     timeRange: "month",
@@ -31,7 +31,7 @@ const QUERY_BUCKETS = [
     query: `site:kickstarter.com/projects/ wearable Kickstarter ${NEGATIVE_QUERY_SUFFIX}`,
     timeRange: "month",
   },
-] as const;
+];
 const ALLOWED_PROJECT_SUBPAGES = new Set(["description"]);
 const CURRENCY_TOKEN = String.raw`(?:(?:US|CA|AU|NZ|HK|SG)?\$|€|£)\s?[\d,.]+(?:\s?[KMBkmb])?`;
 const AI_KEYWORDS = [

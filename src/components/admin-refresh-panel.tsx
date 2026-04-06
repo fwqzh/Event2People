@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 
-import { decodeRefreshProgress } from "@/lib/refresh-progress";
+import { decodeRefreshProgress, getRefreshTriggerLabel } from "@/lib/refresh-progress";
 import type { RefreshStatusSnapshot } from "@/lib/refresh-progress";
 
 type AdminRefreshPanelProps = {
@@ -161,7 +161,7 @@ export function AdminRefreshPanel({ aiEnabled, aiModel, runs }: AdminRefreshPane
           <article key={run.id} className="refresh-run-card">
             <div>
               <strong>{run.status}</strong>
-              <p>{run.trigger}</p>
+              <p>{getRefreshTriggerLabel(run.trigger)}</p>
             </div>
             <span>{decodeRefreshProgress(run.message, run.status as "RUNNING" | "SUCCESS" | "FAILED").label}</span>
           </article>

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { startTransition, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 
+import { SourceRefreshButton } from "@/components/source-refresh-button";
 import type { EventAnalysisView, EventDetailView, EventSummaryView } from "@/lib/types";
 
 type EventSource = "github" | "kickstarter" | "arxiv";
@@ -1125,6 +1126,7 @@ export function EventBoard({
             </div>
 
             <div className="board-section__actions">
+              <SourceRefreshButton source={source} />
               {!isCollapsed && totalDisplayedCount > defaultVisibleCount ? (
                 <button type="button" className="ghost-button" onClick={() => toggleVisibleCount(source, totalDisplayedCount)}>
                   {visibleCount >= totalDisplayedCount ? "收起列表" : showArxivFilters ? "查看更多结果" : "查看更多"}
