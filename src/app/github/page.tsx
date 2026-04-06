@@ -12,6 +12,7 @@ export default async function GitHubPage() {
         datasetVersionId={data.datasetVersionId}
         savedPersonStableIds={data.savedPersonStableIds}
         githubEvents={data.githubEvents}
+        kickstarterEvents={data.kickstarterEvents}
         arxivEvents={data.arxivEvents}
         visibleSources={["github"]}
       />

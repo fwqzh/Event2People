@@ -9,6 +9,7 @@ datasource db {
 
 enum SourceType {
   github
+  kickstarter
   arxiv
 }
 

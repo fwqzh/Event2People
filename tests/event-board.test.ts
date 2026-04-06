@@ -149,6 +149,43 @@ function createArxivSummaryEvent(overrides: Partial<EventSummaryView> = {}): Eve
   });
 }
 
+function createKickstarterSummaryEvent(overrides: Partial<EventSummaryView> = {}): EventSummaryView {
+  return createSummaryEvent({
+    stableId: overrides.stableId ?? "event:kickstarter:orbital-coder",
+    sourceType: "kickstarter",
+    eventType: "activity_spike",
+    eventTag: "Coding Agent",
+    eventTagConfidence: 0.87,
+    eventTitleZh: overrides.eventTitleZh ?? "Orbital Coder",
+    cardTitle: overrides.cardTitle ?? "Orbital Coder",
+    eventHighlightZh: "一个面向开发者工具场景的众筹项目。",
+    eventDetailSummaryZh: "这是一个面向开发者与创作者工具的 Kickstarter 项目，当前筹款 $240,000 / $50,000，状态 剩余 12 days。",
+    metrics: [
+      { label: "Pledged", value: "$240,000" },
+      { label: "Goal", value: "$50,000" },
+      { label: "Backers", value: "3,200" },
+      { label: "Days Left", value: "12 days" },
+    ],
+    sourceLinks: [
+      { label: "Kickstarter", url: "https://www.kickstarter.com/projects/lenaortiz/orbital-coder" },
+      { label: "Creator", url: "https://www.kickstarter.com/projects/lenaortiz/orbital-coder" },
+    ],
+    projectStableIds: [],
+    paperStableIds: [],
+    personStableIds: ["kickstarter:lena-ortiz"],
+    previewPeople: [
+      {
+        stableId: "kickstarter:lena-ortiz",
+        name: "Lena Ortiz",
+        primaryLinkUrl: "https://www.kickstarter.com/projects/lenaortiz/orbital-coder",
+      },
+    ],
+    peopleCount: 1,
+    cardSummary: "这是一个面向开发者与创作者工具的 Kickstarter 项目，当前筹款 $240,000 / $50,000，状态 剩余 12 days。",
+    ...overrides,
+  });
+}
+
 describe("EventBoard", () => {
   beforeEach(() => {
     window.sessionStorage.clear();
@@ -740,6 +777,25 @@ describe("EventBoard", () => {
     expect(screen.getByText("引用来源")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Embodied Planning Kernel 论文解读" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Planning Kernel: 把长链规划拆成基础模块" })).toBeInTheDocument();
+  });
+
+  it("shows the kickstarter original link directly on the card", () => {
+    render(
+      React.createElement(EventBoard, {
+        datasetVersionId: "dataset-kickstarter",
+        savedPersonStableIds: [],
+        githubEvents: [],
+        kickstarterEvents: [createKickstarterSummaryEvent()],
+        arxivEvents: [],
+        visibleSources: ["kickstarter"],
+      }),
+    );
+
+    expect(screen.getByText("原站链接：")).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "https://www.kickstarter.com/projects/lenaortiz/orbital-coder" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Orbital Coder")).toBeInTheDocument();
   });
 
   it("shows pdf-extracted affiliations and contact emails on arxiv author cards", async () => {

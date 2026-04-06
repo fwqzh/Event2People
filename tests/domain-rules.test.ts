@@ -139,6 +139,7 @@ describe("sample dataset", () => {
   it("provides enough events for the default 10-item sections", () => {
     const dataset = buildSampleDataset();
     expect(dataset.events.filter((event) => event.sourceType === "github").length).toBeGreaterThanOrEqual(10);
+    expect(dataset.events.filter((event) => event.sourceType === "kickstarter").length).toBeGreaterThanOrEqual(10);
     expect(dataset.events.filter((event) => event.sourceType === "arxiv").length).toBeGreaterThanOrEqual(10);
   });
 

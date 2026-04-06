@@ -15,8 +15,9 @@ import {
 } from "@/lib/refresh-progress";
 import { decideRepoPaperLink } from "@/lib/repo-paper-linking";
 import { buildSampleDataset } from "@/lib/sample-data";
-import { persistDataset } from "@/lib/seed";
+import { parseLinks, parseMetrics, persistDataset } from "@/lib/seed";
 import { fetchArxivPapers } from "@/lib/sources/arxiv";
+import { fetchKickstarterCampaigns, type KickstarterCampaign } from "@/lib/sources/kickstarter";
 import { enrichGitHubProjectsWithNarrativeContext } from "@/lib/sources/github-project-search";
 import { enrichGitHubOwners, githubStableId } from "@/lib/sources/github-people";
 import { fetchGitHubTrendingRepos } from "@/lib/sources/github";
@@ -24,9 +25,10 @@ import { clampZh, formatDay, repoDisplayName, sentenceZh, slugify, uniqueStrings
 import type { DatasetBundleInput, EventInput, PaperInput, PersonInput, ProjectInput, RepoPaperLinkInput } from "@/lib/types";
 
 const GITHUB_REFRESH_FETCH_LIMIT = 10;
+const KICKSTARTER_REFRESH_FETCH_LIMIT = 10;
 const HOMEPAGE_ARXIV_LIMIT = 10;
 const ARXIV_ACTIVE_POOL_LIMIT = 50;
-const AI_EVENT_ENRICH_LIMIT = GITHUB_REFRESH_FETCH_LIMIT + HOMEPAGE_ARXIV_LIMIT;
+const AI_EVENT_ENRICH_LIMIT = GITHUB_REFRESH_FETCH_LIMIT + KICKSTARTER_REFRESH_FETCH_LIMIT + HOMEPAGE_ARXIV_LIMIT;
 const STALE_REFRESH_MINUTES = 15;
 const countFormatter = new Intl.NumberFormat("en-US");
 
@@ -49,6 +51,66 @@ function uniqueLinkItems(items: Array<{ label: string; url: string }>) {
     seen.add(item.url);
     return true;
   });
+}
+
+function formatKickstarterMoney(value: number | null, fallback = "未知") {
+  return value && value > 0 ? `$${countFormatter.format(value)}` : fallback;
+}
+
+function formatKickstarterCount(value: number | null, fallback = "未知") {
+  return value && value >= 0 ? countFormatter.format(value) : fallback;
+}
+
+function kickstarterStableId(campaign: Pick<KickstarterCampaign, "campaignUrl" | "creatorName" | "campaignName">) {
+  return `kickstarter:${slugify(campaign.creatorName || campaign.campaignUrl || campaign.campaignName)}`;
+}
+
+function buildKickstarterFocus(tag: EventInput["eventTag"], campaign: KickstarterCampaign) {
+  const haystack = [campaign.campaignName, campaign.summaryRaw].join(" ").toLowerCase();
+
+  if (tag === "Robotics" || /robot|robotics|drone|automation/.test(haystack)) {
+    return "机器人与智能硬件";
+  }
+
+  if (tag === "Voice" || /voice|speech|audio|microphone/.test(haystack)) {
+    return "语音交互";
+  }
+
+  if (tag === "Video" || /video|camera/.test(haystack)) {
+    return "视频与影像";
+  }
+
+  if (tag === "Coding Agent" || /developer|coding|workflow|productivity/.test(haystack)) {
+    return "开发者与创作者工具";
+  }
+
+  if (tag === "AI Agent" || /agent|assistant/.test(haystack)) {
+    return "AI 助手";
+  }
+
+  if (tag === "Multimodal" || /multimodal|vision-language|vision/.test(haystack)) {
+    return "多模态交互";
+  }
+
+  return "前沿技术";
+}
+
+function buildKickstarterHighlight(campaign: KickstarterCampaign, tag: EventInput["eventTag"]) {
+  const focus = buildKickstarterFocus(tag, campaign);
+  return sentenceZh(`一个面向${focus}场景的众筹项目`, 20);
+}
+
+function buildKickstarterDetailSummary(campaign: KickstarterCampaign, tag: EventInput["eventTag"]) {
+  const focus = buildKickstarterFocus(tag, campaign);
+  const progress =
+    campaign.pledgedAmount && campaign.goalAmount
+      ? `${formatKickstarterMoney(campaign.pledgedAmount)} / ${formatKickstarterMoney(campaign.goalAmount)}`
+      : campaign.pledgedAmount
+        ? formatKickstarterMoney(campaign.pledgedAmount)
+        : "原站金额待确认";
+  const status = campaign.daysLeftLabel ? `剩余 ${campaign.daysLeftLabel}` : campaign.statusLabel;
+
+  return clampZh(`这是一个面向${focus}的 Kickstarter 项目，当前筹款 ${progress}，状态 ${status || "未知"}。`, 64);
 }
 
 function buildRefreshMessage(
@@ -118,6 +180,19 @@ type StoredProjectRecord = {
   relatedPaperIdsJson: Prisma.JsonValue;
 };
 
+type KickstarterFallbackEventRecord = Prisma.EventGetPayload<{
+  include: {
+    personLinks: {
+      orderBy: {
+        position: "asc";
+      };
+      include: {
+        person: true;
+      };
+    };
+  };
+}>;
+
 function personFromAuthor(name: string): PersonInput {
   return {
     stableId: `author:${slugify(name)}`,
@@ -125,6 +200,26 @@ function personFromAuthor(name: string): PersonInput {
     identitySummaryZh: clampZh("AI 研究者 · arXiv 作者", 36),
     evidenceSummaryZh: clampZh("是当前论文作者", 24),
     sourceUrls: [],
+    organizationNamesRaw: [],
+  };
+}
+
+function personFromKickstarterCreator(campaign: KickstarterCampaign): PersonInput | null {
+  const name = campaign.creatorName.trim();
+
+  if (!name) {
+    return null;
+  }
+
+  const creatorUrl = campaign.creatorUrl?.trim() ?? "";
+
+  return {
+    stableId: kickstarterStableId(campaign),
+    name,
+    identitySummaryZh: clampZh("Kickstarter Creator · 众筹发起人", 36),
+    evidenceSummaryZh: clampZh(`发起 Kickstarter 项目《${campaign.campaignName}》`, 36),
+    sourceUrls: [creatorUrl || campaign.campaignUrl].filter(Boolean),
+    homepageUrl: creatorUrl || null,
     organizationNamesRaw: [],
   };
 }
@@ -590,13 +685,195 @@ function buildArxivEvents(papers: PaperInput[], confirmedLinksByPaper: Map<strin
   });
 }
 
-function buildLiveDatasetBundle(githubProjects: ProjectInput[], papers: PaperInput[], people: PersonInput[], repoPaperLinks: RepoPaperLinkInput[]): DatasetBundleInput {
+function buildKickstarterEvents(campaigns: KickstarterCampaign[]) {
+  return campaigns.map((campaign, index) => {
+    const tag = classifyEventTag([campaign.campaignName, campaign.summaryRaw]);
+    const personStableIds = campaign.creatorName ? [kickstarterStableId(campaign)] : [];
+
+    return {
+      stableId: `event:kickstarter:${slugify(campaign.campaignUrl || campaign.campaignName)}`,
+      sourceType: "kickstarter",
+      eventType: "activity_spike",
+      eventTag: tag.tag,
+      eventTagConfidence: tag.confidence,
+      eventTitleZh: clampZh(campaign.campaignName, 32),
+      eventHighlightZh: buildKickstarterHighlight(campaign, tag.tag),
+      eventDetailSummaryZh: buildKickstarterDetailSummary(campaign, tag.tag),
+      timePrimary: campaign.collectedAt,
+      metrics: [
+        metric("Pledged", campaign.pledgedLabel || formatKickstarterMoney(campaign.pledgedAmount)),
+        metric("Goal", campaign.goalLabel || formatKickstarterMoney(campaign.goalAmount)),
+        metric("Backers", campaign.backersLabel || formatKickstarterCount(campaign.backersCount)),
+        campaign.daysLeftLabel ? metric("Days Left", campaign.daysLeftLabel) : metric("Status", campaign.statusLabel || "Unknown"),
+      ],
+      sourceLinks: uniqueLinkItems([
+        link("Kickstarter", campaign.campaignUrl),
+        ...(campaign.creatorUrl ? [link("Creator", campaign.creatorUrl)] : []),
+      ]),
+      peopleDetectionStatus: personStableIds.length > 0 ? "partial" : "missing",
+      projectStableIds: [],
+      paperStableIds: [],
+      personStableIds,
+      displayRank: index + 1,
+      relatedRepoCount: 0,
+      relatedPaperCount: 0,
+    } satisfies EventInput;
+  });
+}
+
+function mapFallbackKickstarterEventToInput(event: KickstarterFallbackEventRecord): EventInput {
+  return {
+    stableId: event.stableId,
+    sourceType: "kickstarter",
+    eventType: event.eventType,
+    eventTag: event.eventTag as EventInput["eventTag"],
+    eventTagConfidence: event.eventTagConfidence,
+    eventTitleZh: event.eventTitleZh,
+    eventHighlightZh: event.eventHighlightZh,
+    eventDetailSummaryZh: event.eventDetailSummaryZh ?? null,
+    timePrimary: event.timePrimary,
+    metrics: parseMetrics(event.metricsJson),
+    sourceLinks: parseLinks(event.sourceLinksJson),
+    peopleDetectionStatus: event.peopleDetectionStatus,
+    projectStableIds: [],
+    paperStableIds: [],
+    personStableIds: event.personLinks.map((link) => link.person.stableId),
+    displayRank: event.displayRank,
+    relatedRepoCount: event.relatedRepoCount,
+    relatedPaperCount: event.relatedPaperCount,
+  };
+}
+
+function mapFallbackKickstarterPeople(events: KickstarterFallbackEventRecord[]) {
+  const people = new Map<string, PersonInput>();
+
+  for (const event of events) {
+    for (const link of event.personLinks) {
+      if (people.has(link.person.stableId)) {
+        continue;
+      }
+
+      people.set(link.person.stableId, {
+        stableId: link.person.stableId,
+        name: link.person.name,
+        identitySummaryZh: link.person.identitySummaryZh,
+        evidenceSummaryZh: link.person.evidenceSummaryZh,
+        sourceUrls: readStringArray(link.person.sourceUrlsJson),
+        githubUrl: link.person.githubUrl,
+        scholarUrl: link.person.scholarUrl,
+        linkedinUrl: link.person.linkedinUrl,
+        xUrl: link.person.xUrl,
+        homepageUrl: link.person.homepageUrl,
+        email: link.person.email,
+        organizationNamesRaw: readStringArray(link.person.organizationNamesRaw),
+        schoolNamesRaw: readStringArray(link.person.schoolNamesRaw),
+        labNamesRaw: readStringArray(link.person.labNamesRaw),
+        bioSnippetsRaw: readStringArray(link.person.bioSnippetsRaw),
+        founderHistoryRaw: readStringArray(link.person.founderHistoryRaw),
+      });
+    }
+  }
+
+  return [...people.values()];
+}
+
+async function loadKickstarterFallbackCampaigns(prisma: ArxivRefreshFallbackPrisma, limit: number) {
+  const activeDataset = await prisma.datasetVersion.findFirst({
+    where: { status: "ACTIVE" },
+    select: { id: true },
+  });
+
+  if (!activeDataset) {
+    return {
+      events: [] as EventInput[],
+      people: [] as PersonInput[],
+    };
+  }
+
+  const events = await prisma.event.findMany({
+    where: {
+      datasetVersionId: activeDataset.id,
+      sourceType: "kickstarter",
+    },
+    include: {
+      personLinks: {
+        orderBy: { position: "asc" },
+        include: { person: true },
+      },
+    },
+    orderBy: { displayRank: "asc" },
+    take: limit,
+  });
+
+  return {
+    events: events.map(mapFallbackKickstarterEventToInput),
+    people: mapFallbackKickstarterPeople(events),
+  };
+}
+
+export async function loadKickstarterCampaignsForRefresh(
+  prisma: ArxivRefreshFallbackPrisma,
+  limit = KICKSTARTER_REFRESH_FETCH_LIMIT,
+): Promise<{ events: EventInput[]; people: PersonInput[]; warning: string | null }> {
+  try {
+    const campaigns = await fetchKickstarterCampaigns(limit);
+
+    if (campaigns.length > 0) {
+      return {
+        events: buildKickstarterEvents(campaigns),
+        people: campaigns.map(personFromKickstarterCreator).filter(Boolean) as PersonInput[],
+        warning: null,
+      };
+    }
+
+    const fallback = await loadKickstarterFallbackCampaigns(prisma, limit);
+
+    if (fallback.events.length > 0) {
+      return {
+        ...fallback,
+        warning: `Kickstarter 暂未抓到可用项目，已回退到当前活跃数据集的 ${fallback.events.length} 个 campaign`,
+      };
+    }
+
+    return {
+      events: [],
+      people: [],
+      warning: "Kickstarter 暂未抓到可用项目，且没有可用缓存，本次已跳过 Kickstarter 更新",
+    };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "unknown fetch error";
+    console.warn("Kickstarter live fetch fallback:", reason);
+
+    const fallback = await loadKickstarterFallbackCampaigns(prisma, limit);
+
+    if (fallback.events.length > 0) {
+      return {
+        ...fallback,
+        warning: `Kickstarter 临时不可用，已回退到当前活跃数据集的 ${fallback.events.length} 个 campaign`,
+      };
+    }
+
+    return {
+      events: [],
+      people: [],
+      warning: "Kickstarter 临时不可用，且没有可用缓存，本次已跳过 Kickstarter 更新",
+    };
+  }
+}
+
+function buildLiveDatasetBundle(
+  githubProjects: ProjectInput[],
+  papers: PaperInput[],
+  people: PersonInput[],
+  repoPaperLinks: RepoPaperLinkInput[],
+  extraEvents: EventInput[] = [],
+): DatasetBundleInput {
   const paperByStableId = new Map(papers.map((paper) => [paper.stableId, paper]));
   const confirmedLinkIndex = buildConfirmedLinkIndex(repoPaperLinks);
   const githubEvents = buildGitHubEvents(githubProjects, paperByStableId, confirmedLinkIndex.byProject);
   const arxivEvents = buildArxivEvents(papers, confirmedLinkIndex.byPaper);
   const mergedPeople = mergePeopleConservatively(people);
-  const remappedEvents = [...githubEvents, ...arxivEvents].map((event) => ({
+  const remappedEvents = [...githubEvents, ...extraEvents, ...arxivEvents].map((event) => ({
     ...event,
     personStableIds: remapPersonStableIds(event.personStableIds, mergedPeople.stableIdMap),
   }));
@@ -678,11 +955,14 @@ async function executeRefreshRun(prisma: PrismaClient, refreshRunId: string, dat
   try {
     await updateRefreshProgress(prisma, refreshRunId, buildRefreshStageMessage("ingest"));
 
-    const [githubResult, arxivResult] = await Promise.all([
+    const [githubResult, kickstarterResult, arxivResult] = await Promise.all([
       loadGitHubProjectsForRefresh(prisma, GITHUB_REFRESH_FETCH_LIMIT),
+      loadKickstarterCampaignsForRefresh(prisma, KICKSTARTER_REFRESH_FETCH_LIMIT),
       loadArxivPapersForRefresh(prisma, ARXIV_ACTIVE_POOL_LIMIT),
     ]);
-    const sourceWarnings = [githubResult.warning, arxivResult.warning].filter((warning): warning is string => Boolean(warning));
+    const sourceWarnings = [githubResult.warning, kickstarterResult.warning, arxivResult.warning].filter(
+      (warning): warning is string => Boolean(warning),
+    );
 
     await updateRefreshProgress(prisma, refreshRunId, buildRefreshStageMessage("normalize"));
 
@@ -724,15 +1004,15 @@ async function executeRefreshRun(prisma: PrismaClient, refreshRunId: string, dat
         .map((name) => personFromAuthor(name))
         .filter((person) => !githubOwnerIds.has(person.stableId));
 
-      return [...githubOwners, ...authorPeople];
+      return [...githubOwners, ...authorPeople, ...kickstarterResult.people];
     })();
 
     await updateRefreshProgress(prisma, refreshRunId, buildRefreshStageMessage("link"));
     const repoPaperLinks = buildRepoPaperLinks(githubProjects, papers);
 
     const bundle =
-      githubProjects.length > 0 || papers.length > 0
-        ? buildLiveDatasetBundle(githubProjects, papers, people, repoPaperLinks)
+      githubProjects.length > 0 || papers.length > 0 || kickstarterResult.events.length > 0
+        ? buildLiveDatasetBundle(githubProjects, papers, people, repoPaperLinks, kickstarterResult.events)
         : buildSampleDataset();
 
     await updateRefreshProgress(prisma, refreshRunId, buildRefreshStageMessage("ai"));

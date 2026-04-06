@@ -24,6 +24,7 @@
 .DS_Store
 *.pem
 /.local/
+/prisma/dev.db
 
 # debug
 npm-debug.log*

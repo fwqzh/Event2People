@@ -13,6 +13,7 @@ type SiteNavProps = {
 export function SiteNav({ lastUpdatedLabel }: SiteNavProps) {
   const pathname = usePathname();
   const isGitHubActive = pathname === "/" || pathname === "/github";
+  const isKickstarterActive = pathname === "/kickstarter";
   const isArxivActive = pathname === "/arxiv";
   const isPipelineActive = pathname === "/pipeline";
   const isSettingsActive = pathname === "/settings";
@@ -21,6 +22,13 @@ export function SiteNav({ lastUpdatedLabel }: SiteNavProps) {
     <nav className="site-nav" aria-label="主导航">
       <Link href="/github" className={`site-nav__button ${isGitHubActive ? "is-active" : ""}`} aria-current={isGitHubActive ? "page" : undefined}>
         GitHub
+      </Link>
+      <Link
+        href="/kickstarter"
+        className={`site-nav__button ${isKickstarterActive ? "is-active" : ""}`}
+        aria-current={isKickstarterActive ? "page" : undefined}
+      >
+        Kickstarter
       </Link>
       <Link href="/arxiv" className={`site-nav__button ${isArxivActive ? "is-active" : ""}`} aria-current={isArxivActive ? "page" : undefined}>
         arXiv

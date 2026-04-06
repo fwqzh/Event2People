@@ -6,13 +6,14 @@ import { startTransition, useEffect, useEffectEvent, useMemo, useRef, useState }
 
 import type { EventAnalysisView, EventDetailView, EventSummaryView } from "@/lib/types";
 
-type EventSource = "github" | "arxiv";
+type EventSource = "github" | "kickstarter" | "arxiv";
 type EventDetailStatus = "idle" | "loading" | "ready" | "error";
 
 type EventBoardProps = {
   datasetVersionId: string;
   savedPersonStableIds: string[];
   githubEvents: EventSummaryView[];
+  kickstarterEvents?: EventSummaryView[];
   arxivEvents: EventSummaryView[];
   visibleSources?: EventSource[];
   enableArxivFilters?: boolean;
@@ -49,6 +50,7 @@ const SECTION_CONFIG: Record<
     kicker: string;
     status: string;
     description: string;
+    emptyState: string;
     externalUrl?: string;
   }
 > = {
@@ -57,7 +59,15 @@ const SECTION_CONFIG: Record<
     kicker: "Build / Execution",
     status: "GitHub Trending Daily",
     description: "基于 GitHub 官方 Trending Daily 页面动态解析，按 today stars 排序后展示 Top 10 项目事件。",
+    emptyState: "当前没有匹配项目。",
     externalUrl: "https://github.com/trending?since=daily",
+  },
+  kickstarter: {
+    title: "Kickstarter Signals",
+    kicker: "Product / Demand",
+    status: "Kickstarter Search",
+    description: "基于 Kickstarter campaign 搜索候选聚合，只保留原站项目页，并按 pledged amount 从高到低展示前 10 个众筹项目。",
+    emptyState: "当前没有匹配 campaign。",
   },
   arxiv: {
     title: "ArXiv Trending",
@@ -65,6 +75,7 @@ const SECTION_CONFIG: Record<
     status: "arXiv + Semantic Scholar",
     description:
       "基于最近 90 天 arXiv 候选论文构建 50 篇活跃论文池，再结合 Semantic Scholar 引用、venue 信号和新鲜度排序；当前页支持严格筛选后默认展示前 20 篇。",
+    emptyState: "当前没有匹配论文。",
   },
 };
 
@@ -162,6 +173,7 @@ export function EventBoard({
   datasetVersionId,
   savedPersonStableIds,
   githubEvents,
+  kickstarterEvents = [],
   arxivEvents,
   visibleSources,
   enableArxivFilters = false,
@@ -184,10 +196,12 @@ export function EventBoard({
   const [isExpandedIdHydrated, setIsExpandedIdHydrated] = useState(false);
   const [visibleCounts, setVisibleCounts] = useState<Record<EventSource, number>>({
     github: DEFAULT_VISIBLE_COUNT,
+    kickstarter: DEFAULT_VISIBLE_COUNT,
     arxiv: ARXIV_VISIBLE_LIMIT,
   });
   const [collapsedSections, setCollapsedSections] = useState<Record<EventSource, boolean>>({
     github: false,
+    kickstarter: false,
     arxiv: false,
   });
   const [newlySavedPersonIds, setNewlySavedPersonIds] = useState<Set<string>>(() => new Set());
@@ -209,11 +223,11 @@ export function EventBoard({
   );
   const [status, setStatus] = useState("");
   const sectionsToRender = useMemo(
-    () => (visibleSources?.length ? [...new Set(visibleSources)] : (["github", "arxiv"] as EventSource[])),
+    () => (visibleSources?.length ? [...new Set(visibleSources)] : (["github", "kickstarter", "arxiv"] as EventSource[])),
     [visibleSources],
   );
 
-  const allEvents = useMemo(() => [...githubEvents, ...arxivEvents], [arxivEvents, githubEvents]);
+  const allEvents = useMemo(() => [...githubEvents, ...kickstarterEvents, ...arxivEvents], [arxivEvents, githubEvents, kickstarterEvents]);
   const selectedArxivCategories = useMemo(() => new Set(arxivCategories), [arxivCategories]);
   const filteredArxivEvents = useMemo(() => {
     if (!enableArxivFilters) {
@@ -246,9 +260,15 @@ export function EventBoard({
   const renderedSectionEvents = useMemo(
     () =>
       sectionsToRender.flatMap((source) =>
-        source === "github" ? githubEvents : enableArxivFilters ? filteredArxivEvents : arxivEvents,
+        source === "github"
+          ? githubEvents
+          : source === "kickstarter"
+            ? kickstarterEvents
+            : enableArxivFilters
+              ? filteredArxivEvents
+              : arxivEvents,
       ),
-    [arxivEvents, enableArxivFilters, filteredArxivEvents, githubEvents, sectionsToRender],
+    [arxivEvents, enableArxivFilters, filteredArxivEvents, githubEvents, kickstarterEvents, sectionsToRender],
   );
   const savedPersonIds = useMemo(() => {
     const ids = new Set<string>(serverSavedPersonIds);
@@ -432,7 +452,7 @@ export function EventBoard({
     }
 
     if (
-      sourceType === "github" &&
+      sourceType !== "arxiv" &&
       (existingAnalysis?.analysisSummary ||
         existingAnalysis?.analysisReferences?.length ||
         existingDetail?.analysisSummary ||
@@ -640,6 +660,7 @@ export function EventBoard({
     setAnalysisById({});
     setVisibleCounts({
       github: DEFAULT_VISIBLE_COUNT,
+      kickstarter: DEFAULT_VISIBLE_COUNT,
       arxiv: ARXIV_VISIBLE_LIMIT,
     });
     warmedEventIdsRef.current.clear();
@@ -945,6 +966,18 @@ export function EventBoard({
     return event.sourceLinks[0]?.url ?? null;
   }
 
+  function getPrimarySourceLabel(event: EventSummaryView) {
+    if (event.sourceType === "arxiv") {
+      return "ArXiv 网页";
+    }
+
+    if (event.sourceType === "kickstarter") {
+      return "原站链接";
+    }
+
+    return "链接";
+  }
+
   function getArxivPaperUrl(event: EventSummaryView) {
     return (
       event.sourceLinks.find((sourceLink) => sourceLink.label === "Paper" && /arxiv\.org\/abs\//i.test(sourceLink.url))?.url ??
@@ -1182,7 +1215,8 @@ export function EventBoard({
               );
               const showExpandedIntroInCard = isExpanded && event.sourceType === "github" && showExpandedIntro;
               const showExpandedIntroInDetail = event.sourceType !== "github" && showExpandedIntro;
-              const showPrimarySourceLinkInCard = isExpanded && event.sourceType === "github" && Boolean(primarySourceUrl);
+              const showPrimarySourceLinkInCard =
+                Boolean(primarySourceUrl) && ((isExpanded && event.sourceType === "github") || event.sourceType === "kickstarter");
               const showArxivPaperLinkInCard = isExpanded && event.sourceType === "arxiv" && Boolean(arxivPaperUrl);
               const highlightCopy = showExpandedIntroInCard ? detail!.introSummary : event.cardSummary;
               const showPaperExplanation = event.sourceType === "arxiv" && Boolean(detail?.paperExplanation);
@@ -1192,15 +1226,15 @@ export function EventBoard({
               const showEventLens = Boolean(detail) && detail.detailSummary !== event.eventHighlightZh;
               const analysisParagraphs = getAnalysisParagraphs(analysis);
               const showBlockingDetailLoading = isDetailLoading && !detail && detailLoadingVisibleById[event.stableId];
-              const showGitHubAnalysisLoading =
+              const showProjectAnalysisLoading =
                 isExpanded &&
-                event.sourceType === "github" &&
+                event.sourceType !== "arxiv" &&
                 Boolean(detail) &&
                 analysisParagraphs.length === 0 &&
                 analysisStatus === "loading";
-              const showGitHubAnalysisError =
+              const showProjectAnalysisError =
                 isExpanded &&
-                event.sourceType === "github" &&
+                event.sourceType !== "arxiv" &&
                 Boolean(detail) &&
                 analysisParagraphs.length === 0 &&
                 analysisStatus === "error";
@@ -1277,8 +1311,8 @@ export function EventBoard({
                     </div>
 
                     <div className="event-card__body">
-                      <div className="event-card__title-row">
-                        <button
+                        <div className="event-card__title-row">
+                          <button
                           type="button"
                           className={`event-card__toggle ${isExpanded ? "is-expanded" : "is-collapsed"}`}
                           onClick={() => toggleExpanded(event.stableId)}
@@ -1308,7 +1342,7 @@ export function EventBoard({
                       ) : null}
                       {showPrimarySourceLinkInCard && primarySourceUrl ? (
                         <div className="event-card__primary-link-row">
-                          <span className="event-card__primary-link-label">链接：</span>
+                          <span className="event-card__primary-link-label">{getPrimarySourceLabel(event)}：</span>
                           <Link
                             className="event-card__primary-link"
                             href={primarySourceUrl}
@@ -1587,7 +1621,7 @@ export function EventBoard({
                                 </section>
                               ) : null}
 
-                              {showGitHubAnalysisLoading ? (
+                              {showProjectAnalysisLoading ? (
                                 <section className="detail-panel detail-panel--wide detail-panel--analysis">
                                   <h5>详细解读</h5>
                                   <div className="detail-panel__loading-row" aria-live="polite">
@@ -1602,7 +1636,7 @@ export function EventBoard({
                                 </section>
                               ) : null}
 
-                              {showGitHubAnalysisError ? (
+                              {showProjectAnalysisError ? (
                                 <section className="detail-panel detail-panel--wide detail-panel--analysis">
                                   <h5>详细解读</h5>
                                   <p className="detail-panel__subcopy">{analysisError ?? "详细解读暂时生成失败"}</p>
@@ -1776,7 +1810,7 @@ export function EventBoard({
             </div>
           ) : (
             <div className="empty-state">
-              当前没有匹配论文。
+              {config.emptyState}
             </div>
           )
         ) : (
@@ -1790,7 +1824,9 @@ export function EventBoard({
 
   return (
     <div className="board-layout">
-      {sectionsToRender.map((source) => renderSection(source, source === "github" ? githubEvents : arxivEvents))}
+      {sectionsToRender.map((source) =>
+        renderSection(source, source === "github" ? githubEvents : source === "kickstarter" ? kickstarterEvents : arxivEvents),
+      )}
     </div>
   );
 }

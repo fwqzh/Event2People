@@ -24,8 +24,8 @@ const REFRESH_PROGRESS_PREFIX = "progress::";
 
 const STAGE_COPY: Record<RefreshProgressStage, { progress: number; label: string }> = {
   queued: { progress: 4, label: "准备刷新任务" },
-  ingest: { progress: 12, label: "抓取 GitHub Trending 与 arXiv 候选" },
-  normalize: { progress: 28, label: "整理项目、论文与基础结构" },
+  ingest: { progress: 12, label: "抓取 GitHub、Kickstarter 与 arXiv 候选" },
+  normalize: { progress: 28, label: "整理项目、campaign、论文与基础结构" },
   people: { progress: 40, label: "补全 GitHub 负责人公开信息" },
   link: { progress: 62, label: "建立 repo-paper 与人物关系" },
   ai: { progress: 76, label: "生成 AI 中文文案" },

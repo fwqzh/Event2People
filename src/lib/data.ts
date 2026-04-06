@@ -8,6 +8,7 @@ import {
   looksLikeMalformedGitHubIntro,
 } from "@/lib/github-copy";
 import { generateGitHubProjectAnalysis } from "@/lib/github-project-analysis";
+import { generateKickstarterCampaignAnalysis } from "@/lib/kickstarter-analysis";
 import { readStringArray } from "@/lib/json";
 import { generatePaperAnalysis } from "@/lib/paper-analysis";
 import { buildPaperExplanationZh, buildPaperTopicView } from "@/lib/paper-copy";
@@ -137,7 +138,7 @@ const HOMEPAGE_VISIBLE_LIMIT = 10;
 const countFormatter = new Intl.NumberFormat("en-US");
 
 function normalizeHomepageMetrics(
-  sourceType: "github" | "arxiv",
+  sourceType: "github" | "kickstarter" | "arxiv",
   metrics: Array<{ label: string; value: string }>,
   projects: ProjectRecord[] = [],
 ) {
@@ -191,6 +192,17 @@ function extractTodayStars(metrics: Array<{ label: string; value: string }>) {
   return match ? Math.abs(Number(match[0])) : 0;
 }
 
+function extractKickstarterPledged(metrics: Array<{ label: string; value: string }>) {
+  const metric = metrics.find((item) => item.label === "Pledged");
+
+  if (!metric) {
+    return -1;
+  }
+
+  const match = metric.value.replace(/,/g, "").match(/\d+(?:\.\d+)?/);
+  return match ? Number(match[0]) : -1;
+}
+
 function compactCopy(value: string | null | undefined) {
   return value?.replace(/\s+/g, " ").trim() ?? "";
 }
@@ -214,8 +226,16 @@ function uniqueCopyParts(values: Array<string | null | undefined>) {
     });
 }
 
-function getSourceSummaryLabel(sourceType: "github" | "arxiv") {
-  return sourceType === "github" ? "项目简介" : "论文概览";
+function getSourceSummaryLabel(sourceType: "github" | "kickstarter" | "arxiv") {
+  if (sourceType === "github") {
+    return "项目简介";
+  }
+
+  if (sourceType === "kickstarter") {
+    return "Campaign 概览";
+  }
+
+  return "论文概览";
 }
 
 function isGenericArxivSummary(value: string | null | undefined) {
@@ -229,7 +249,7 @@ function isGenericArxivSummary(value: string | null | undefined) {
 }
 
 function buildSourceSummary(
-  sourceType: "github" | "arxiv",
+  sourceType: "github" | "kickstarter" | "arxiv",
   project: ProjectRecord | undefined,
   paper: PaperRecord | undefined,
   fallback: string,
@@ -238,7 +258,9 @@ function buildSourceSummary(
   const summary =
     sourceType === "github"
       ? uniqueCopyParts([project?.repoDescriptionRaw]).join(" ")
-      : uniqueCopyParts([paper?.pdfTextRaw, paper?.abstractRaw]).join(" ");
+      : sourceType === "arxiv"
+        ? uniqueCopyParts([paper?.pdfTextRaw, paper?.abstractRaw]).join(" ")
+        : "";
 
   return clampCopy(summary || fallback, limit);
 }
@@ -497,7 +519,9 @@ function mapEventSummary(
   const cardSummary =
     event.sourceType === "github"
       ? getGitHubNarrativeSummary(event, projects[0], safeHighlight)
-      : buildArxivReadableSummary(event, papers[0], arxivNarrative, CARD_SOURCE_SUMMARY_LIMIT);
+      : event.sourceType === "arxiv"
+        ? buildArxivReadableSummary(event, papers[0], arxivNarrative, CARD_SOURCE_SUMMARY_LIMIT)
+        : buildSourceSummary(event.sourceType, projects[0], papers[0], compactCopy(event.eventDetailSummaryZh) || safeHighlight, CARD_SOURCE_SUMMARY_LIMIT);
   const paperSummaryMetadata = event.sourceType === "arxiv" ? buildArxivSummaryMetadata(event, papers[0]) : null;
 
   return {
@@ -564,7 +588,9 @@ async function mapEventDetail(
   const cardSummary =
     event.sourceType === "github"
       ? getGitHubNarrativeSummary(event, projects[0], safeHighlight)
-      : buildArxivReadableSummary(event, papers[0], arxivNarrative, CARD_SOURCE_SUMMARY_LIMIT);
+      : event.sourceType === "arxiv"
+        ? buildArxivReadableSummary(event, papers[0], arxivNarrative, CARD_SOURCE_SUMMARY_LIMIT)
+        : buildSourceSummary(event.sourceType, projects[0], papers[0], safeHighlight, CARD_SOURCE_SUMMARY_LIMIT);
 
   return {
     stableId: event.stableId,
@@ -589,7 +615,7 @@ async function mapEventDetail(
   };
 }
 
-async function getBoardData(options?: { githubLimit?: number; arxivLimit?: number }) {
+async function getBoardData(options?: { githubLimit?: number; kickstarterLimit?: number; arxivLimit?: number }) {
   const activeDataset = await ensureActiveDataset(prisma);
   const savedEntries = await prisma.pipelineEntry.findMany({
     select: { personStableId: true },
@@ -645,6 +671,14 @@ async function getBoardData(options?: { githubLimit?: number; arxivLimit?: numbe
       ...event,
       displayRank: index + 1,
     }));
+  const kickstarterEvents = mappedEvents
+    .filter((event) => event.sourceType === "kickstarter")
+    .sort((left, right) => extractKickstarterPledged(right.metrics) - extractKickstarterPledged(left.metrics))
+    .slice(0, options?.kickstarterLimit ?? HOMEPAGE_VISIBLE_LIMIT)
+    .map((event, index) => ({
+      ...event,
+      displayRank: index + 1,
+    }));
   const arxivEvents = mappedEvents
     .filter((event) => event.sourceType === "arxiv")
     .slice(0, options?.arxivLimit);
@@ -653,6 +687,7 @@ async function getBoardData(options?: { githubLimit?: number; arxivLimit?: numbe
     datasetVersionId: activeDataset.id,
     savedPersonStableIds: [...savedPeople],
     githubEvents,
+    kickstarterEvents,
     arxivEvents,
   };
 }
@@ -660,6 +695,7 @@ async function getBoardData(options?: { githubLimit?: number; arxivLimit?: numbe
 export async function getHomepageData() {
   return getBoardData({
     githubLimit: HOMEPAGE_VISIBLE_LIMIT,
+    kickstarterLimit: HOMEPAGE_VISIBLE_LIMIT,
     arxivLimit: HOMEPAGE_VISIBLE_LIMIT,
   });
 }
@@ -667,6 +703,15 @@ export async function getHomepageData() {
 export async function getArxivPageData() {
   return getBoardData({
     githubLimit: 0,
+    kickstarterLimit: 0,
+  });
+}
+
+export async function getKickstarterPageData() {
+  return getBoardData({
+    githubLimit: 0,
+    kickstarterLimit: HOMEPAGE_VISIBLE_LIMIT,
+    arxivLimit: 0,
   });
 }
 
@@ -825,6 +870,29 @@ export async function getActiveEventAnalysisByStableId(stableId: string): Promis
       analysisSummary: analysis.analysisSummary,
       analysisReferences: analysis.analysisReferences,
       paperExplanation: analysis.paperExplanation,
+    };
+  }
+
+  if (event.sourceType === "kickstarter") {
+    const detail = await mapEventDetail(event);
+    const analysis = await generateKickstarterCampaignAnalysis({
+      stableId: event.stableId,
+      eventTitleZh: event.eventTitleZh,
+      eventHighlightZh: event.eventHighlightZh,
+      eventTag: event.eventTag,
+      detailSummary: detail.detailSummary,
+      metrics: parseMetrics(event.metricsJson),
+      sourceLinks: parseLinks(event.sourceLinksJson),
+      people: event.personLinks.map((link) => ({
+        name: link.person.name,
+        identitySummaryZh: link.person.identitySummaryZh,
+      })),
+    });
+
+    return {
+      stableId: event.stableId,
+      analysisSummary: analysis.analysisSummary,
+      analysisReferences: analysis.analysisReferences,
     };
   }
 

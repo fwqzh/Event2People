@@ -33,7 +33,7 @@ export function buildPersonLinks(person: PersonLinkSource): LinkItem[] {
     url
       ? [
           {
-            label: url.includes("github.com") ? "GitHub" : "外链",
+            label: url.includes("github.com") ? "GitHub" : url.includes("kickstarter.com") ? "Kickstarter" : "外链",
             url,
           },
         ]

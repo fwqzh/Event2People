@@ -81,6 +81,38 @@ export function buildSampleDataset(now = new Date()): DatasetBundleInput {
       githubUrl: "https://github.com/noahkim",
       organizationNamesRaw: ["NVIDIA"],
     },
+    {
+      stableId: "kickstarter:lena-ortiz",
+      name: "Lena Ortiz",
+      identitySummaryZh: "Kickstarter Creator · 众筹发起人",
+      evidenceSummaryZh: "发起 Kickstarter 项目《Orbital Coder》",
+      sourceUrls: ["https://www.kickstarter.com/projects/lenaortiz/orbital-coder"],
+      organizationNamesRaw: [],
+    },
+    {
+      stableId: "kickstarter:omar-haddad",
+      name: "Omar Haddad",
+      identitySummaryZh: "Kickstarter Creator · 众筹发起人",
+      evidenceSummaryZh: "发起 Kickstarter 项目《Atlas Workshop Arm》",
+      sourceUrls: ["https://www.kickstarter.com/projects/omarhaddad/atlas-workshop-arm"],
+      organizationNamesRaw: [],
+    },
+    {
+      stableId: "kickstarter:mei-lin",
+      name: "Mei Lin",
+      identitySummaryZh: "Kickstarter Creator · 众筹发起人",
+      evidenceSummaryZh: "发起 Kickstarter 项目《Echo Clip》",
+      sourceUrls: ["https://www.kickstarter.com/projects/meilin/echo-clip"],
+      organizationNamesRaw: [],
+    },
+    {
+      stableId: "kickstarter:jonah-reeves",
+      name: "Jonah Reeves",
+      identitySummaryZh: "Kickstarter Creator · 众筹发起人",
+      evidenceSummaryZh: "发起 Kickstarter 项目《FramePilot Cam》",
+      sourceUrls: ["https://www.kickstarter.com/projects/jonahreeves/framepilot-cam"],
+      organizationNamesRaw: [],
+    },
   ];
 
   const projects: ProjectInput[] = [
@@ -482,6 +514,121 @@ export function buildSampleDataset(now = new Date()): DatasetBundleInput {
     },
   ];
 
+  const kickstarterEvents: EventInput[] = [
+    {
+      stableId: "event:kickstarter:orbital-coder",
+      sourceType: "kickstarter",
+      eventType: "activity_spike",
+      eventTag: "Coding Agent",
+      eventTagConfidence: 0.9,
+      eventTitleZh: "Orbital Coder",
+      eventHighlightZh: sentenceZh("一个面向开发者工具场景的众筹项目", 20),
+      eventDetailSummaryZh: "这是一个面向开发者与创作者工具的 Kickstarter 项目，当前筹款 $240,000 / $50,000，状态 剩余 12 days。",
+      timePrimary: subHours(now, 5),
+      metrics: metrics([
+        ["Pledged", "$240,000"],
+        ["Goal", "$50,000"],
+        ["Backers", "3,200"],
+        ["Days Left", "12 days"],
+      ]),
+      sourceLinks: links([
+        ["Kickstarter", "https://www.kickstarter.com/projects/lenaortiz/orbital-coder"],
+        ["Creator", "https://www.kickstarter.com/projects/lenaortiz/orbital-coder"],
+      ]),
+      peopleDetectionStatus: "partial",
+      projectStableIds: [],
+      paperStableIds: [],
+      personStableIds: ["kickstarter:lena-ortiz"],
+      displayRank: 1,
+      relatedRepoCount: 0,
+      relatedPaperCount: 0,
+    },
+    {
+      stableId: "event:kickstarter:atlas-workshop-arm",
+      sourceType: "kickstarter",
+      eventType: "activity_spike",
+      eventTag: "Robotics",
+      eventTagConfidence: 0.9,
+      eventTitleZh: "Atlas Workshop Arm",
+      eventHighlightZh: sentenceZh("一个面向机器人与智能硬件场景的众筹项目", 20),
+      eventDetailSummaryZh: "这是一个面向机器人与智能硬件的 Kickstarter 项目，当前筹款 $180,000 / $80,000，状态 剩余 9 days。",
+      timePrimary: subHours(now, 7),
+      metrics: metrics([
+        ["Pledged", "$180,000"],
+        ["Goal", "$80,000"],
+        ["Backers", "1,480"],
+        ["Days Left", "9 days"],
+      ]),
+      sourceLinks: links([
+        ["Kickstarter", "https://www.kickstarter.com/projects/omarhaddad/atlas-workshop-arm"],
+        ["Creator", "https://www.kickstarter.com/projects/omarhaddad/atlas-workshop-arm"],
+      ]),
+      peopleDetectionStatus: "partial",
+      projectStableIds: [],
+      paperStableIds: [],
+      personStableIds: ["kickstarter:omar-haddad"],
+      displayRank: 2,
+      relatedRepoCount: 0,
+      relatedPaperCount: 0,
+    },
+    {
+      stableId: "event:kickstarter:echo-clip",
+      sourceType: "kickstarter",
+      eventType: "activity_spike",
+      eventTag: "Voice",
+      eventTagConfidence: 0.86,
+      eventTitleZh: "Echo Clip",
+      eventHighlightZh: sentenceZh("一个面向语音交互场景的众筹项目", 20),
+      eventDetailSummaryZh: "这是一个面向语音交互的 Kickstarter 项目，当前筹款 $120,000 / $45,000，状态 剩余 16 days。",
+      timePrimary: subHours(now, 9),
+      metrics: metrics([
+        ["Pledged", "$120,000"],
+        ["Goal", "$45,000"],
+        ["Backers", "1,920"],
+        ["Days Left", "16 days"],
+      ]),
+      sourceLinks: links([
+        ["Kickstarter", "https://www.kickstarter.com/projects/meilin/echo-clip"],
+        ["Creator", "https://www.kickstarter.com/projects/meilin/echo-clip"],
+      ]),
+      peopleDetectionStatus: "partial",
+      projectStableIds: [],
+      paperStableIds: [],
+      personStableIds: ["kickstarter:mei-lin"],
+      displayRank: 3,
+      relatedRepoCount: 0,
+      relatedPaperCount: 0,
+    },
+    {
+      stableId: "event:kickstarter:framepilot-cam",
+      sourceType: "kickstarter",
+      eventType: "activity_spike",
+      eventTag: "Video",
+      eventTagConfidence: 0.82,
+      eventTitleZh: "FramePilot Cam",
+      eventHighlightZh: sentenceZh("一个面向视频与影像场景的众筹项目", 20),
+      eventDetailSummaryZh: "这是一个面向视频与影像的 Kickstarter 项目，当前筹款 $90,000 / $30,000，状态 剩余 6 days。",
+      timePrimary: subHours(now, 12),
+      metrics: metrics([
+        ["Pledged", "$90,000"],
+        ["Goal", "$30,000"],
+        ["Backers", "860"],
+        ["Days Left", "6 days"],
+      ]),
+      sourceLinks: links([
+        ["Kickstarter", "https://www.kickstarter.com/projects/jonahreeves/framepilot-cam"],
+        ["Creator", "https://www.kickstarter.com/projects/jonahreeves/framepilot-cam"],
+      ]),
+      peopleDetectionStatus: "partial",
+      projectStableIds: [],
+      paperStableIds: [],
+      personStableIds: ["kickstarter:jonah-reeves"],
+      displayRank: 4,
+      relatedRepoCount: 0,
+      relatedPaperCount: 0,
+    },
+  ];
+
   while (githubEvents.length < 12) {
     const index = githubEvents.length + 1;
     const tagPool: EventTag[] = ["AI Agent", "Robotics", "Open Source Infra", "Reasoning", "Coding Agent", "Multimodal"];
@@ -539,6 +686,56 @@ export function buildSampleDataset(now = new Date()): DatasetBundleInput {
       displayRank: index,
       relatedRepoCount: index % 3 === 0 ? 1 : 0,
       relatedPaperCount: 1,
+    });
+  }
+
+  while (kickstarterEvents.length < 12) {
+    const index = kickstarterEvents.length + 1;
+    const tagPool: EventTag[] = ["AI Agent", "Robotics", "Voice", "Video", "Multimodal", "Coding Agent"];
+    const tag = tagPool[(index - 1) % tagPool.length];
+    const pledged = 90_000 - (index - 4) * 7_500;
+    const goal = Math.max(20_000, pledged - 35_000);
+    const backers = 800 - (index - 4) * 45;
+    const creatorStableId = `kickstarter:auto-creator-${index}`;
+    const campaignSlug = `signal-device-${index}`;
+    const creatorName = `Creator ${index}`;
+
+    people.push({
+      stableId: creatorStableId,
+      name: creatorName,
+      identitySummaryZh: "Kickstarter Creator · 众筹发起人",
+      evidenceSummaryZh: `发起 Kickstarter 项目《Signal Device ${index}》`,
+      sourceUrls: [`https://www.kickstarter.com/projects/example/${campaignSlug}`],
+      organizationNamesRaw: [],
+    });
+
+    kickstarterEvents.push({
+      stableId: `event:kickstarter:auto-${index}`,
+      sourceType: "kickstarter",
+      eventType: "activity_spike",
+      eventTag: tag,
+      eventTagConfidence: 0.72,
+      eventTitleZh: `Signal Device ${index}`,
+      eventHighlightZh: sentenceZh("一个面向前沿技术场景的众筹项目", 20),
+      eventDetailSummaryZh: `这是一个面向前沿技术的 Kickstarter 项目，当前筹款 $${pledged.toLocaleString("en-US")} / $${goal.toLocaleString("en-US")}，状态 剩余 ${6 + index} days。`,
+      timePrimary: subHours(now, 12 + index * 2),
+      metrics: metrics([
+        ["Pledged", `$${pledged.toLocaleString("en-US")}`],
+        ["Goal", `$${goal.toLocaleString("en-US")}`],
+        ["Backers", `${Math.max(backers, 180)}`],
+        ["Days Left", `${6 + index} days`],
+      ]),
+      sourceLinks: links([
+        ["Kickstarter", `https://www.kickstarter.com/projects/example/${campaignSlug}`],
+        ["Creator", `https://www.kickstarter.com/projects/example/${campaignSlug}`],
+      ]),
+      peopleDetectionStatus: "partial",
+      projectStableIds: [],
+      paperStableIds: [],
+      personStableIds: [creatorStableId],
+      displayRank: index,
+      relatedRepoCount: 0,
+      relatedPaperCount: 0,
     });
   }
 
@@ -601,7 +798,7 @@ export function buildSampleDataset(now = new Date()): DatasetBundleInput {
         confidence: "confirmed",
       },
     ],
-    events: [...githubEvents, ...arxivEvents],
+    events: [...githubEvents, ...kickstarterEvents, ...arxivEvents],
     pipelineEntries,
   };
 }
