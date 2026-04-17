@@ -61,8 +61,6 @@ export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
         <div className="toolbar-card__copy">
           <span className="section-kicker">Action Workspace</span>
           <h2>Pipeline</h2>
-          <p>这是一个面向 GitHub、arXiv 和 Kickstarter 的前沿项目信号跟踪工具，用来把项目、论文、人物和后续跟进动作串起来。</p>
-          <p>这里不再做“要不要跟进”的判断，只承接你已经确认值得继续追踪的人物与后续动作。</p>
         </div>
 
         <div className="toolbar-card__cluster">

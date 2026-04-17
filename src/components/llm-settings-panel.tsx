@@ -16,42 +16,6 @@ type LlmSettingsResponse = {
   settings?: LlmProviderSettingsSnapshot[];
 };
 
-function getApiKeySourceLabel(snapshot: LlmProviderSettingsSnapshot) {
-  if (snapshot.apiKeySource === "saved") {
-    return "当前使用本地 API Key";
-  }
-
-  if (snapshot.apiKeySource === "env") {
-    return "当前回退到环境变量";
-  }
-
-  return "当前未配置 API Key";
-}
-
-function getValueSourceLabel(source: LlmProviderSettingsSnapshot["baseUrlSource"] | LlmProviderSettingsSnapshot["modelSource"]) {
-  if (source === "saved") {
-    return "本地设置";
-  }
-
-  if (source === "env") {
-    return "环境变量";
-  }
-
-  if (source === "default") {
-    return "默认值";
-  }
-
-  return "未设置";
-}
-
-function getProviderSaveHint(snapshot: LlmProviderSettingsSnapshot) {
-  if (snapshot.runtimeReady) {
-    return "保存后，当前项目会优先使用这里的配置。";
-  }
-
-  return "当前项目还没直接接这个平台，但可以先把 Key 存在这里。";
-}
-
 function getProviderChoiceHint(snapshot: LlmProviderSettingsSnapshot) {
   if (snapshot.configured) {
     return "已保存";
@@ -79,7 +43,6 @@ export function LlmSettingsPanel({ initialSnapshots }: LlmSettingsPanelProps) {
   const [draftBaseUrl, setDraftBaseUrl] = useState(() => toInitialDraft(initialSnapshots[0]).baseUrl);
   const [draftModel, setDraftModel] = useState(() => toInitialDraft(initialSnapshots[0]).model);
   const [isSaving, setIsSaving] = useState(false);
-  const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   const [status, setStatus] = useState("");
 
   const activeSnapshot = useMemo(
@@ -93,14 +56,11 @@ export function LlmSettingsPanel({ initialSnapshots }: LlmSettingsPanelProps) {
     setDraftApiKey(nextDraft.apiKey);
     setDraftBaseUrl(nextDraft.baseUrl);
     setDraftModel(nextDraft.model);
-    setIsAdvancedOpen(activeSnapshot.baseUrlSource !== "none" || activeSnapshot.modelSource === "saved" || activeSnapshot.modelSource === "env");
   }, [activeSnapshot]);
 
   useEffect(() => {
     setStatus("");
   }, [selectedProviderId]);
-
-  const configuredCount = snapshots.filter((snapshot) => snapshot.configured).length;
 
   async function handleSave(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -182,31 +142,9 @@ export function LlmSettingsPanel({ initialSnapshots }: LlmSettingsPanelProps) {
       <div className="settings-card__header">
         <div>
           <span className="section-kicker">Runtime Settings</span>
-          <h2>大模型 API</h2>
-          <p>如果你手里只有一个 API Key，也够用。先选平台，把 Key 粘贴进去，再点保存，其他选项都可以先不填。</p>
+          <h2>大模型 API Key</h2>
+          <p>选平台，粘贴 API Key，保存。</p>
         </div>
-      </div>
-
-      <div className="settings-guide">
-        <div className="settings-guide__step">
-          <strong>1. 选平台</strong>
-          <p>选和你拿到 API Key 的平台同名的那个。</p>
-        </div>
-        <div className="settings-guide__step">
-          <strong>2. 贴 Key</strong>
-          <p>只填 API Key 就能保存，Base URL 和模型名先留空也没关系。</p>
-        </div>
-        <div className="settings-guide__step">
-          <strong>3. 点保存</strong>
-          <p>配置只保存在这台电脑，不会改你的 `.env` 文件。</p>
-        </div>
-      </div>
-
-      <div className="settings-card__meta">
-        <span className={`settings-card__meta-pill ${configuredCount > 0 ? "is-configured" : "is-empty"}`}>
-          {configuredCount} / {snapshots.length} 已配置 API Key
-        </span>
-        <span className="settings-card__meta-preview">不知道填什么时，只填 API Key 就好</span>
       </div>
 
       <div className="settings-provider-grid" aria-label="大模型 Provider 选择">
@@ -220,35 +158,19 @@ export function LlmSettingsPanel({ initialSnapshots }: LlmSettingsPanelProps) {
             }`}
             onClick={() => setSelectedProviderId(snapshot.id)}
           >
-            <div className="settings-provider-chip__copy">
-              <strong>{snapshot.label}</strong>
-              <p>{snapshot.runtimeReady ? "当前项目可直接使用" : "先保存起来，后续可复用"}</p>
-            </div>
-            <em>{getProviderChoiceHint(snapshot)}</em>
+            <strong>{snapshot.label}</strong>
+            {snapshot.configured ? <em>{getProviderChoiceHint(snapshot)}</em> : null}
           </button>
         ))}
       </div>
 
       <div className="settings-provider-panel">
-        <div className="settings-provider-panel__header">
-          <div>
-            <span className="section-kicker">Current Provider</span>
-            <h3>{activeSnapshot.label}</h3>
-            <p>{getProviderSaveHint(activeSnapshot)}</p>
-          </div>
-          <span className={`settings-provider-badge ${activeSnapshot.runtimeReady ? "is-ready" : ""}`}>{activeSnapshot.badge}</span>
-        </div>
-
-        <div className="settings-card__meta">
-          <span className={`settings-card__meta-pill ${activeSnapshot.configured ? "is-configured" : "is-empty"}`}>
-            {getApiKeySourceLabel(activeSnapshot)}
-          </span>
-          <span className="settings-card__meta-preview">{activeSnapshot.preview ?? "尚未配置 API Key"}</span>
-        </div>
+        <h3>{activeSnapshot.label}</h3>
+        {activeSnapshot.configured ? <p className="settings-provider-panel__status">已保存</p> : null}
 
         <form className="settings-form" onSubmit={(event) => void handleSave(event)}>
           <label className="settings-form__field">
-            <span>API Key</span>
+            <span>{activeSnapshot.label} API Key</span>
             <input
               type="password"
               value={draftApiKey}
@@ -257,7 +179,7 @@ export function LlmSettingsPanel({ initialSnapshots }: LlmSettingsPanelProps) {
               autoComplete="off"
               spellCheck={false}
             />
-            <small className="settings-form__hint">如果你现在只拿到了一个 Key，填这一项就够了。</small>
+            <small className="settings-form__hint">只填这一项就可以。</small>
           </label>
 
           <div className="settings-form__actions">
@@ -274,13 +196,8 @@ export function LlmSettingsPanel({ initialSnapshots }: LlmSettingsPanelProps) {
             </button>
           </div>
 
-          <details
-            className="settings-advanced"
-            open={isAdvancedOpen}
-            onToggle={(event) => setIsAdvancedOpen(event.currentTarget.open)}
-          >
-            <summary>高级选项（大多数人不用填）</summary>
-            <p>只有你在用代理网关，或者想固定模型名时，再展开填写。</p>
+          <details className="settings-advanced">
+            <summary>更多设置（可选）</summary>
 
             <label className="settings-form__field">
               <span>Base URL / 网关地址</span>
@@ -292,9 +209,6 @@ export function LlmSettingsPanel({ initialSnapshots }: LlmSettingsPanelProps) {
                 autoComplete="off"
                 spellCheck={false}
               />
-              <small className="settings-form__hint">
-                当前值：{activeSnapshot.baseUrl || "未填写"} · {getValueSourceLabel(activeSnapshot.baseUrlSource)}
-              </small>
             </label>
 
             <label className="settings-form__field">
@@ -307,25 +221,7 @@ export function LlmSettingsPanel({ initialSnapshots }: LlmSettingsPanelProps) {
                 autoComplete="off"
                 spellCheck={false}
               />
-              <small className="settings-form__hint">
-                当前值：{activeSnapshot.model || "未填写"} · {getValueSourceLabel(activeSnapshot.modelSource)}
-              </small>
             </label>
-
-            <div className="settings-provider-notes">
-              <p>
-                API Key 环境变量：
-                <code>{activeSnapshot.envAliases.apiKey.join(" / ")}</code>
-              </p>
-              <p>
-                Base URL 环境变量：
-                <code>{activeSnapshot.envAliases.baseUrl.join(" / ") || "无"}</code>
-              </p>
-              <p>
-                Model 环境变量：
-                <code>{activeSnapshot.envAliases.model.join(" / ") || "无"}</code>
-              </p>
-            </div>
           </details>
         </form>
       </div>
