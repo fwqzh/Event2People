@@ -4,6 +4,7 @@ import "@testing-library/jest-dom/vitest";
 import React from "react";
 
 import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { PipelineWorkbench } from "@/components/pipeline-workbench";
@@ -36,6 +37,14 @@ function createEntry(overrides: Partial<PipelineEntryView> = {}): PipelineEntryV
       title: "example/vox-agent",
       url: "https://github.com/example/vox-agent",
       introZh: "用于浏览器工作流的 agent 执行循环。",
+    },
+    originalEvent: {
+      sourceLabel: "来源：GitHub",
+      eventTag: "AI Agent",
+      title: "vox-agent",
+      summaryZh: "这是原始卡片里的项目摘要。",
+      timeAgo: "2 小时前",
+      sourceLinks: [{ label: "GitHub", url: "https://github.com/example/vox-agent" }],
     },
     originalCardHref: "/github?event=event%3Agithub%3Avox-agent",
     sourceLabel: "来源：GitHub",
@@ -71,19 +80,25 @@ describe("PipelineWorkbench", () => {
     cleanup();
   });
 
-  it("renders the simplified card with project link and direct contact links", () => {
+  it("renders the simplified card with project link and direct contact links", async () => {
+    const user = userEvent.setup();
+
     render(React.createElement(PipelineWorkbench, { entries: [createEntry()] }));
 
     expect(screen.getByText("Alice Chen")).toBeInTheDocument();
     expect(screen.getByText("来源：GitHub")).toBeInTheDocument();
     expect(screen.getByText("OpenAI")).toBeInTheDocument();
     expect(screen.getByText("用于浏览器工作流的 agent 执行循环。")).toBeInTheDocument();
+    expect(screen.getByText("项目原始链接")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "查看项目/作品" })).toHaveAttribute("href", "https://github.com/example/vox-agent");
-    expect(screen.getByRole("link", { name: "查看原始卡片" })).toHaveAttribute("href", "/github?event=event%3Agithub%3Avox-agent");
+    expect(screen.getByRole("button", { name: "展开原始卡片" })).toBeInTheDocument();
     expect(screen.getByText("GitHub")).toBeInTheDocument();
     expect(screen.getByText("Email")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "https://github.com/alice-chen" })).toHaveAttribute("href", "https://github.com/alice-chen");
     expect(screen.getByRole("link", { name: "mailto:alice@example.com" })).toHaveAttribute("href", "mailto:alice@example.com");
+    await user.click(screen.getByRole("button", { name: "展开原始卡片" }));
+    expect(screen.getByText("这是原始卡片里的项目摘要。")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "在来源页打开" })).toHaveAttribute("href", "/github?event=event%3Agithub%3Avox-agent");
     expect(screen.queryByRole("button", { name: "详情" })).not.toBeInTheDocument();
     expect(screen.queryByText("联系")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "复制" })).not.toBeInTheDocument();

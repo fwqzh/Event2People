@@ -26,6 +26,7 @@ import type {
   PersonView,
   PipelineEntryView,
   PipelineFeaturedItemView,
+  PipelineOriginalEventCardView,
 } from "@/lib/types";
 
 type PersonRecord = {
@@ -502,9 +503,7 @@ function buildPipelineOriginalCardHref(event: PipelineEventRecord | undefined, f
   return `${getSourcePagePath(sourceType)}?event=${encodeURIComponent(stableId)}`;
 }
 
-function getPipelineSourceLabel(event: PipelineEventRecord | undefined, fallbackStableId: string) {
-  const sourceType = event?.sourceType ?? inferSourceTypeFromEventStableId(fallbackStableId);
-
+function getPipelineSourceLabelByType(sourceType: "github" | "kickstarter" | "arxiv" | null) {
   switch (sourceType) {
     case "github":
       return "来源：GitHub";
@@ -515,6 +514,59 @@ function getPipelineSourceLabel(event: PipelineEventRecord | undefined, fallback
     default:
       return undefined;
   }
+}
+
+function getPipelineSourceLabel(event: PipelineEventRecord | undefined, fallbackStableId: string) {
+  const sourceType = event?.sourceType ?? inferSourceTypeFromEventStableId(fallbackStableId);
+  return getPipelineSourceLabelByType(sourceType);
+}
+
+function buildPipelineOriginalEventCard(
+  event: PipelineEventRecord | undefined,
+  fallbackTitle: string,
+): PipelineOriginalEventCardView | undefined {
+  if (!event) {
+    return undefined;
+  }
+
+  const sourceType = event.sourceType;
+  const sourceLabel = getPipelineSourceLabelByType(sourceType);
+
+  if (!sourceLabel) {
+    return undefined;
+  }
+
+  const project = event.projectLinks[0]?.project;
+  const paper = event.paperLinks[0]?.paper;
+  const safeHighlight =
+    sourceType === "github"
+      ? normalizeGitHubHighlight(event.eventHighlightZh, project, event.eventTag as EventSummaryView["eventTag"])
+      : event.eventHighlightZh;
+  const title =
+    sourceType === "arxiv"
+      ? paper?.paperTitle ?? (compactCopy(event.eventTitleZh) || fallbackTitle)
+      : compactCopy(event.eventTitleZh) || fallbackTitle;
+  const summaryZh =
+    sourceType === "github"
+      ? getGitHubNarrativeSummary(event, project, safeHighlight)
+      : sourceType === "arxiv"
+        ? buildArxivReadableSummary(event, paper, buildArxivNarrative(event, paper), CARD_SOURCE_SUMMARY_LIMIT)
+        : buildSourceSummary(
+            sourceType,
+            project,
+            paper,
+            compactCopy(event.eventDetailSummaryZh) || compactCopy(event.eventHighlightZh) || fallbackTitle,
+            CARD_SOURCE_SUMMARY_LIMIT,
+          );
+
+  return {
+    sourceLabel,
+    eventTag: event.eventTag,
+    title,
+    summaryZh,
+    timeAgo: timeAgo(event.timePrimary),
+    sourceLinks: parseLinks(event.sourceLinksJson).slice(0, 3),
+  };
 }
 
 function getGitHubNarrativeSummary(
@@ -922,6 +974,7 @@ export async function getPipelineData() {
         lastContactedAt: entry.lastContactedAt,
         notes: entry.notes,
         featuredItem: buildPipelineFeaturedItem(eventsMap.get(entry.savedFromEventStableId), entry.savedFromEventTitle),
+        originalEvent: buildPipelineOriginalEventCard(eventsMap.get(entry.savedFromEventStableId), entry.savedFromEventTitle),
         originalCardHref: buildPipelineOriginalCardHref(eventsMap.get(entry.savedFromEventStableId), entry.savedFromEventStableId),
         sourceLabel: getPipelineSourceLabel(eventsMap.get(entry.savedFromEventStableId), entry.savedFromEventStableId),
         person,

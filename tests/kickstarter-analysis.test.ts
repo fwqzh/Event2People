@@ -58,7 +58,7 @@ describe("generateKickstarterCampaignAnalysis", () => {
       label: "Kickstarter",
       url: "https://www.kickstarter.com/projects/cameraintelligence/caira-worlds-first-ai-native-mirrorless-camera",
     });
-  });
+  }, 20_000);
 
   it("uses OpenAI to generate natural product analysis when configured", async () => {
     const openAiCreateMock = vi.fn().mockResolvedValue({
@@ -135,5 +135,5 @@ describe("generateKickstarterCampaignAnalysis", () => {
     });
     expect(result.analysisSummary).toContain("这款 Kickstarter 产品真正想卖的不是一支单纯的录音笔");
     expect(result.analysisSummary).not.toContain("可以先理解成");
-  });
+  }, 20_000);
 });

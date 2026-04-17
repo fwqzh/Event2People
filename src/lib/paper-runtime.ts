@@ -328,12 +328,7 @@ async function resolveFromPdfText(input: {
 }
 
 function shouldFetchPdf(metadata: ResolvedPaperRuntimeMetadata) {
-  return (
-    !metadata.pdfTextRaw ||
-    metadata.institutionNames.length === 0 ||
-    metadata.leadAuthorAffiliations.length === 0 ||
-    metadata.authorProfiles.every((profile) => profile.institutions.length === 0 && profile.emails.length === 0)
-  );
+  return !metadata.pdfTextRaw || metadata.institutionNames.length === 0;
 }
 
 export async function resolvePaperRuntimeMetadata(input: PaperRuntimeInput): Promise<ResolvedPaperRuntimeMetadata> {

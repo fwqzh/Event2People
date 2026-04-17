@@ -13,6 +13,7 @@ type PipelineWorkbenchProps = {
 export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
   const [localEntries, setLocalEntries] = useState(entries);
   const [status, setStatus] = useState("");
+  const [expandedOriginalCards, setExpandedOriginalCards] = useState<Record<string, boolean>>({});
   const contactableCount = localEntries.filter((entry) => entry.person.links.length > 0).length;
 
   function getPrimaryAffiliation(person: PersonView) {
@@ -45,6 +46,13 @@ export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
     setLocalEntries((current) => {
       return current.filter((entry) => entry.personStableId !== personStableId);
     });
+  }
+
+  function toggleOriginalCard(personStableId: string) {
+    setExpandedOriginalCards((current) => ({
+      ...current,
+      [personStableId]: !current[personStableId],
+    }));
   }
 
   return (
@@ -89,6 +97,7 @@ export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
           {localEntries.map((entry) => {
             const primaryAffiliation = getPrimaryAffiliation(entry.person);
             const showIdentitySummary = shouldShowIdentitySummary(entry, primaryAffiliation);
+            const isOriginalCardExpanded = expandedOriginalCards[entry.personStableId] ?? false;
 
             return (
               <article key={entry.personStableId} className="pipeline-card pipeline-card--simple">
@@ -119,7 +128,7 @@ export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
                   {showIdentitySummary ? <p className="pipeline-card__summary">{entry.person.identitySummaryZh}</p> : null}
 
                   <section className="pipeline-card__section">
-                    <span className="pipeline-card__section-label">项目/作品</span>
+                    <span className="pipeline-card__section-label">项目原始链接</span>
                     <strong className="pipeline-card__item-title">
                       {entry.featuredItem?.title ?? entry.savedFromEventTitle}
                     </strong>
@@ -131,10 +140,39 @@ export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
                         </Link>
                       </div>
                     ) : null}
-                    {entry.originalCardHref ? (
-                      <Link href={entry.originalCardHref} className="pipeline-card__secondary-link">
-                        查看原始卡片
-                      </Link>
+                    {entry.originalEvent ? (
+                      <button
+                        type="button"
+                        className="pipeline-card__secondary-link"
+                        onClick={() => toggleOriginalCard(entry.personStableId)}
+                      >
+                        {isOriginalCardExpanded ? "收起原始卡片" : "展开原始卡片"}
+                      </button>
+                    ) : null}
+                    {isOriginalCardExpanded && entry.originalEvent ? (
+                      <section className="pipeline-original-card">
+                        <div className="pipeline-original-card__meta">
+                          <span className="pipeline-card__source-pill">{entry.originalEvent.sourceLabel}</span>
+                          <span className="pipeline-original-card__tag">{entry.originalEvent.eventTag}</span>
+                          <span className="pipeline-original-card__time">{entry.originalEvent.timeAgo}</span>
+                        </div>
+                        <h4>{entry.originalEvent.title}</h4>
+                        <p>{entry.originalEvent.summaryZh}</p>
+                        {entry.originalEvent.sourceLinks.length > 0 ? (
+                          <div className="pipeline-original-card__links">
+                            {entry.originalEvent.sourceLinks.map((link) => (
+                              <Link key={link.url} href={link.url} target="_blank" rel="noreferrer" className="pipeline-original-card__link">
+                                {link.label}: {link.url}
+                              </Link>
+                            ))}
+                          </div>
+                        ) : null}
+                        {entry.originalCardHref ? (
+                          <Link href={entry.originalCardHref} className="pipeline-original-card__page-link">
+                            在来源页打开
+                          </Link>
+                        ) : null}
+                      </section>
                     ) : null}
                   </section>
 

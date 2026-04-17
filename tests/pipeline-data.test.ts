@@ -74,6 +74,7 @@ function createGitHubEvent() {
     eventTag: "AI Agent",
     eventHighlightZh: "浏览器 agent 执行框架。",
     eventTitleZh: "vox-agent",
+    timePrimary: new Date("2026-04-15T09:00:00.000Z"),
     eventDetailSummaryZh: null,
     relatedRepoCount: 1,
     sourceLinksJson: [{ label: "GitHub", url: "https://github.com/example/vox-agent" }],
@@ -99,6 +100,7 @@ function createArxivEvent() {
     eventTag: "Research Infra",
     eventHighlightZh: "这是一条 fallback 高亮。",
     eventTitleZh: "Agent Pipeline",
+    timePrimary: new Date("2026-04-14T09:00:00.000Z"),
     eventDetailSummaryZh: null,
     relatedRepoCount: 0,
     sourceLinksJson: [{ label: "Paper", url: "https://arxiv.org/abs/2604.12345" }],
@@ -125,6 +127,7 @@ function createKickstarterEvent() {
     eventTag: "Coding Agent",
     eventHighlightZh: "一个面向开发者工具场景的众筹项目。",
     eventTitleZh: "Orbital Coder",
+    timePrimary: new Date("2026-04-13T09:00:00.000Z"),
     eventDetailSummaryZh: null,
     relatedRepoCount: 0,
     sourceLinksJson: [{ label: "Kickstarter", url: "https://www.kickstarter.com/projects/example/orbital-coder" }],
@@ -155,6 +158,9 @@ describe("getPipelineData", () => {
       url: "https://github.com/example/vox-agent",
       introZh: "用于浏览器工作流的 agent 执行循环",
     });
+    expect(entries[0]?.originalEvent?.title).toBe("vox-agent");
+    expect(entries[0]?.originalEvent?.sourceLabel).toBe("来源：GitHub");
+    expect(entries[0]?.originalEvent?.summaryZh).toBeTruthy();
     expect(entries[0]?.originalCardHref).toBe("/github?event=event%3Agithub%3Avox-agent");
     expect(entries[0]?.sourceLabel).toBe("来源：GitHub");
   });
@@ -175,6 +181,8 @@ describe("getPipelineData", () => {
     expect(entries[0]?.featuredItem?.url).toBe("https://arxiv.org/abs/2604.12345");
     expect(entries[0]?.featuredItem?.introZh).toBeTruthy();
     expect(entries[0]?.featuredItem?.introZh).not.toBe("这是一条 fallback 高亮。");
+    expect(entries[0]?.originalEvent?.title).toBe("Agent Pipeline: A Modular Workflow Runtime");
+    expect(entries[0]?.originalEvent?.sourceLabel).toBe("来源：论文");
     expect(entries[0]?.originalCardHref).toBe("/arxiv?event=event%3Aarxiv%3Aagent-pipeline");
     expect(entries[0]?.sourceLabel).toBe("来源：论文");
   });
@@ -196,6 +204,8 @@ describe("getPipelineData", () => {
       url: "https://www.kickstarter.com/projects/example/orbital-coder",
       introZh: "一个面向开发者工具场景的众筹项目。",
     });
+    expect(entries[0]?.originalEvent?.title).toBe("Orbital Coder");
+    expect(entries[0]?.originalEvent?.sourceLabel).toBe("来源：Kickstarter");
     expect(entries[0]?.originalCardHref).toBe("/kickstarter?event=event%3Akickstarter%3Aorbital-coder");
     expect(entries[0]?.sourceLabel).toBe("来源：Kickstarter");
   });

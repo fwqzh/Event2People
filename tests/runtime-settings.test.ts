@@ -18,18 +18,18 @@ import {
 describe("runtime settings", () => {
   const originalSettingsPath = process.env.EVENT2PEOPLE_SETTINGS_PATH;
   const originalTavilyApiKey = process.env.TAVILY_API_KEY;
-  const originalOpenAiApiKey = process.env.OPENAI_API_KEY;
-  const originalOpenAiBaseUrl = process.env.OPENAI_BASE_URL;
-  const originalOpenAiModel = process.env.OPENAI_MODEL;
+  const originalMiniMaxApiKey = process.env.MINIMAX_API_KEY;
+  const originalMiniMaxBaseUrl = process.env.MINIMAX_BASE_URL;
+  const originalMiniMaxModel = process.env.MINIMAX_MODEL;
   let tempDir = "";
 
   beforeEach(async () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), "event2people-settings-"));
     process.env.EVENT2PEOPLE_SETTINGS_PATH = path.join(tempDir, "settings.json");
     delete process.env.TAVILY_API_KEY;
-    delete process.env.OPENAI_API_KEY;
-    delete process.env.OPENAI_BASE_URL;
-    delete process.env.OPENAI_MODEL;
+    delete process.env.MINIMAX_API_KEY;
+    delete process.env.MINIMAX_BASE_URL;
+    delete process.env.MINIMAX_MODEL;
   });
 
   afterEach(async () => {
@@ -45,22 +45,22 @@ describe("runtime settings", () => {
       delete process.env.TAVILY_API_KEY;
     }
 
-    if (originalOpenAiApiKey) {
-      process.env.OPENAI_API_KEY = originalOpenAiApiKey;
+    if (originalMiniMaxApiKey) {
+      process.env.MINIMAX_API_KEY = originalMiniMaxApiKey;
     } else {
-      delete process.env.OPENAI_API_KEY;
+      delete process.env.MINIMAX_API_KEY;
     }
 
-    if (originalOpenAiBaseUrl) {
-      process.env.OPENAI_BASE_URL = originalOpenAiBaseUrl;
+    if (originalMiniMaxBaseUrl) {
+      process.env.MINIMAX_BASE_URL = originalMiniMaxBaseUrl;
     } else {
-      delete process.env.OPENAI_BASE_URL;
+      delete process.env.MINIMAX_BASE_URL;
     }
 
-    if (originalOpenAiModel) {
-      process.env.OPENAI_MODEL = originalOpenAiModel;
+    if (originalMiniMaxModel) {
+      process.env.MINIMAX_MODEL = originalMiniMaxModel;
     } else {
-      delete process.env.OPENAI_MODEL;
+      delete process.env.MINIMAX_MODEL;
     }
 
     if (tempDir) {
@@ -96,11 +96,7 @@ describe("runtime settings", () => {
     });
   });
 
-  it("prefers saved OpenAI provider settings over env fallbacks", async () => {
-    process.env.OPENAI_API_KEY = "env-openai-key";
-    process.env.OPENAI_BASE_URL = "https://env.example/v1";
-    process.env.OPENAI_MODEL = "env-model";
-
+  it("persists OpenAI provider settings locally", async () => {
     await saveLlmProviderSettings("openai", {
       apiKey: "saved-openai-key",
       baseUrl: "https://saved.example/v1",
@@ -131,29 +127,29 @@ describe("runtime settings", () => {
     expect(savedFile).toContain("gpt-5-mini-local");
   });
 
-  it("falls back to env OpenAI settings after clearing local provider config", async () => {
-    process.env.OPENAI_API_KEY = "env-openai-key";
-    process.env.OPENAI_BASE_URL = "https://env.example/v1";
-    process.env.OPENAI_MODEL = "env-model";
+  it("falls back to env provider settings after clearing local config", async () => {
+    process.env.MINIMAX_API_KEY = "env-minimax-key";
+    process.env.MINIMAX_BASE_URL = "https://env.minimax.example/v1";
+    process.env.MINIMAX_MODEL = "minimax-env-model";
 
-    await saveLlmProviderSettings("openai", {
-      apiKey: "saved-openai-key",
-      baseUrl: "https://saved.example/v1",
-      model: "saved-model",
+    await saveLlmProviderSettings("minimax", {
+      apiKey: "saved-minimax-key",
+      baseUrl: "https://saved.minimax.example/v1",
+      model: "minimax-local-model",
     });
-    await clearLlmProviderSettings("openai");
+    await clearLlmProviderSettings("minimax");
 
-    expect(await getLlmProviderRuntimeConfig("openai")).toMatchObject({
+    expect(await getLlmProviderRuntimeConfig("minimax")).toMatchObject({
       configured: true,
-      apiKey: "env-openai-key",
+      apiKey: "env-minimax-key",
       apiKeySource: "env",
-      baseUrl: "https://env.example/v1",
+      baseUrl: "https://env.minimax.example/v1",
       baseUrlSource: "env",
-      model: "env-model",
+      model: "minimax-env-model",
       modelSource: "env",
     });
 
-    expect(await getLlmProviderSettingsSnapshot("openai")).toMatchObject({
+    expect(await getLlmProviderSettingsSnapshot("minimax")).toMatchObject({
       configured: true,
       apiKeySource: "env",
       baseUrlSource: "env",

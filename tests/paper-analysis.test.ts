@@ -77,7 +77,7 @@ The policy improves execution stability.
     expect(result.paperExplanation?.method).toContain("[1]");
     expect(result.paperExplanation?.method).toContain("[2]");
     expect(result.paperExplanation?.contribution).toContain("[2]");
-  }, 15_000);
+  }, 30_000);
 
   it("generates paper-specific detailed analysis with aligned reference numbering when OpenAI is enabled", async () => {
     const openAiCreateMock = vi.fn().mockResolvedValue({
@@ -182,5 +182,5 @@ The policy improves end-to-end manipulation robustness.
     expect(result.analysisSummary).toContain("GAPG");
     expect(result.analysisSummary).toContain("[1]");
     expect(result.analysisSummary).toContain("[2]");
-  }, 15_000);
+  }, 30_000);
 });

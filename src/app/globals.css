@@ -1836,6 +1836,32 @@ body::after {
   gap: 10px;
 }
 
+.settings-guide {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.settings-guide__step {
+  display: grid;
+  gap: 8px;
+  padding: 18px;
+  border-radius: 22px;
+  border: 1px solid rgba(16, 32, 51, 0.12);
+  background: rgba(255, 252, 244, 0.64);
+}
+
+.settings-guide__step strong {
+  font-family: var(--font-serif), "Times New Roman", serif;
+  font-size: 1.05rem;
+  color: var(--ink);
+}
+
+.settings-guide__step p {
+  margin: 0;
+  color: var(--muted);
+}
+
 .settings-card__meta-pill,
 .settings-card__meta-preview {
   display: inline-flex;
@@ -1878,6 +1904,11 @@ body::after {
   color: var(--ink);
 }
 
+.settings-form__hint {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
 .settings-form__field input {
   width: min(520px, 100%);
   min-height: 50px;
@@ -1906,11 +1937,11 @@ body::after {
 
 .settings-provider-chip {
   display: flex;
-  min-height: 128px;
+  min-height: 110px;
   flex-direction: column;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
   padding: 18px;
   border-radius: 22px;
   border: 1px solid rgba(16, 32, 51, 0.12);
@@ -1951,19 +1982,21 @@ body::after {
   font-size: 1.2rem;
 }
 
-.settings-provider-chip span,
+.settings-provider-chip__copy {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-provider-chip__copy p {
+  margin: 0;
+  color: var(--muted);
+}
+
 .settings-provider-chip em {
   font-style: normal;
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-}
-
-.settings-provider-chip span {
-  color: rgba(16, 32, 51, 0.58);
-}
-
-.settings-provider-chip em {
   color: var(--ink);
 }
 
@@ -2037,6 +2070,27 @@ body::after {
   font-size: 11px;
   letter-spacing: 0.04em;
   overflow-wrap: anywhere;
+}
+
+.settings-advanced {
+  display: grid;
+  gap: 14px;
+  padding: 18px 20px;
+  border-radius: 22px;
+  border: 1px dashed rgba(16, 32, 51, 0.16);
+  background: rgba(255, 255, 255, 0.42);
+}
+
+.settings-advanced summary {
+  cursor: pointer;
+  font-family: var(--font-serif), "Times New Roman", serif;
+  font-size: 1.05rem;
+  color: var(--ink);
+}
+
+.settings-advanced p {
+  margin: 0;
+  color: var(--muted);
 }
 
 .board-section {
@@ -3357,6 +3411,10 @@ body::after {
     grid-template-columns: 1fr;
   }
 
+  .settings-guide {
+    grid-template-columns: 1fr;
+  }
+
   .settings-card__links {
     justify-content: flex-start;
   }
@@ -3935,14 +3993,87 @@ body > .site-header {
 }
 
 .pipeline-card__secondary-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
   color: var(--teal);
   line-height: 1.6;
   text-decoration: underline;
   text-underline-offset: 0.14em;
+  cursor: pointer;
 }
 
 .pipeline-card__secondary-link:hover,
 .pipeline-card__secondary-link:focus-visible {
+  color: var(--ink);
+}
+
+.pipeline-original-card {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid rgba(16, 32, 51, 0.08);
+  border-radius: 18px;
+  background: rgba(245, 237, 222, 0.72);
+}
+
+.pipeline-original-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.pipeline-original-card__tag,
+.pipeline-original-card__time {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(16, 32, 51, 0.06);
+  color: var(--ink);
+  font-size: 0.82rem;
+  line-height: 1;
+}
+
+.pipeline-original-card h4,
+.pipeline-original-card p {
+  margin: 0;
+}
+
+.pipeline-original-card h4 {
+  color: var(--ink);
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+.pipeline-original-card p {
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.pipeline-original-card__links {
+  display: grid;
+  gap: 8px;
+}
+
+.pipeline-original-card__link,
+.pipeline-original-card__page-link {
+  color: var(--teal);
+  line-height: 1.7;
+  text-decoration: underline;
+  text-underline-offset: 0.14em;
+  word-break: break-all;
+}
+
+.pipeline-original-card__link:hover,
+.pipeline-original-card__link:focus-visible,
+.pipeline-original-card__page-link:hover,
+.pipeline-original-card__page-link:focus-visible {
   color: var(--ink);
 }
 

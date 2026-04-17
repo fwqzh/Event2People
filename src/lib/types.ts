@@ -220,8 +220,18 @@ export type PipelineFeaturedItemView = {
   introZh: string;
 };
 
+export type PipelineOriginalEventCardView = {
+  sourceLabel: string;
+  eventTag: string;
+  title: string;
+  summaryZh: string;
+  timeAgo: string;
+  sourceLinks: LinkItem[];
+};
+
 export type PipelineEntryView = PipelineEntrySeedInput & {
   featuredItem?: PipelineFeaturedItemView;
+  originalEvent?: PipelineOriginalEventCardView;
   originalCardHref?: string;
   sourceLabel?: string;
   person: PersonView;

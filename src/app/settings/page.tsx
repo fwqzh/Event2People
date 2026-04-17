@@ -33,8 +33,8 @@ export default async function SettingsPage() {
         </div>
       </section>
 
-      <LlmSettingsPanel initialSnapshots={llmSnapshots} />
       <TavilySettingsPanel initialSnapshot={tavilySnapshot} />
+      <LlmSettingsPanel initialSnapshots={llmSnapshots} />
     </div>
   );
 }

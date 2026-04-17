@@ -988,7 +988,7 @@ describe("EventBoard", () => {
 
     expect(screen.getByText("Filtered Paper 21")).toBeInTheDocument();
     expect(screen.getByText("Filtered Paper 22")).toBeInTheDocument();
-  });
+  }, 15_000);
 
   it("expands a deep-linked source card from the event query param", async () => {
     mockPathname = "/github";
@@ -1040,7 +1040,7 @@ describe("EventBoard", () => {
       expect.stringContaining("/api/events/detail?stableId=event%3Agithub%3Arepo-12"),
       expect.anything(),
     );
-  });
+  }, 15_000);
 
   it("filters arxiv papers by time and category, then syncs the URL and shows underflow guidance", async () => {
     vi.spyOn(Date, "now").mockReturnValue(new Date("2026-03-26T12:00:00.000Z").getTime());

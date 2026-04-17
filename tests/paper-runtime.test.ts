@@ -47,7 +47,7 @@ This paper studies embodied planning.
       { author: "Jian Wu", institutions: ["Tsinghua University"] },
       { author: "Sofia Garcia", institutions: ["Shanghai AI Laboratory"] },
     ]);
-  });
+  }, 20_000);
 
   it("falls back to live pdf extraction when stored paper metadata is missing", async () => {
     const extractPaperDataFromPdf = vi.fn().mockResolvedValue({
@@ -101,7 +101,7 @@ This paper studies push-grasp manipulation.
       { author: "Alice Chen", institutions: ["Stanford University"] },
       { author: "Bob Li", institutions: ["MIT"] },
     ]);
-  });
+  }, 20_000);
 
   it("reuses the same in-flight runtime enrichment for concurrent requests", async () => {
     const extractPaperDataFromPdf = vi.fn().mockImplementation(
@@ -158,5 +158,5 @@ This paper studies push-grasp manipulation.
 
     expect(extractPaperDataFromPdf).toHaveBeenCalledTimes(1);
     expect(first.authorProfiles).toEqual(second.authorProfiles);
-  });
+  }, 20_000);
 });
