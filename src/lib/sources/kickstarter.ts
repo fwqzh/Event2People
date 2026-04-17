@@ -1,9 +1,11 @@
+import { load } from "cheerio";
 import { isValid, parse } from "date-fns";
 
 import { getTavilyApiKey } from "@/lib/runtime-settings";
 import { clampPlainText } from "@/lib/text";
 
 const SEARCH_REQUEST_TIMEOUT_MS = 6_000;
+const CAMPAIGN_IMAGE_REQUEST_TIMEOUT_MS = 5_000;
 const TAVILY_COUNTRY = "United States";
 const NEGATIVE_QUERY_SUFFIX = '-"board game" -tabletop -comic -film -book';
 const QUERY_BUCKETS: ReadonlyArray<{ query: string; timeRange: "week" | "month" }> = [
@@ -135,6 +137,7 @@ type TavilySearchResult = {
 export type KickstarterCampaign = {
   campaignName: string;
   campaignUrl: string;
+  imageUrl: string | null;
   creatorName: string;
   creatorUrl: string | null;
   startedAt: Date | null;
@@ -188,6 +191,21 @@ function normalizeUrl(value: string | null | undefined) {
 
   try {
     return new URL(candidate).toString();
+  } catch {
+    return "";
+  }
+}
+
+function normalizeImageUrl(value: string | null | undefined, baseUrl: string) {
+  const candidate = compactText(value);
+
+  if (!candidate || candidate.startsWith("data:")) {
+    return "";
+  }
+
+  try {
+    const parsed = new URL(candidate, baseUrl);
+    return /^https?:$/i.test(parsed.protocol) ? parsed.toString() : "";
   } catch {
     return "";
   }
@@ -518,6 +536,86 @@ function buildSummary(text: string, campaignName: string) {
   return clampPlainText(withoutMetrics || normalized, 280);
 }
 
+function isLikelyPreviewImageUrl(url: string) {
+  const normalized = compactText(url).toLowerCase();
+
+  if (!normalized) {
+    return false;
+  }
+
+  if (/\b(avatar|icon|logo|favicon|creator|profile)\b/.test(normalized)) {
+    return false;
+  }
+
+  return /\.(?:avif|gif|jpe?g|png|webp)(?:[?#].*)?$/i.test(normalized) || /imgix\.net|ksr-ugc/i.test(normalized);
+}
+
+function extractPreviewImageUrlFromContent(text: string, campaignUrl: string) {
+  const markdownMatch = text.match(/!\[[^\]]*]\(([^)\s]+)\)/i);
+  const metaMatch = text.match(/(?:og:image|twitter:image)[^"'<>]{0,120}["'](https?:\/\/[^"'<>]+)["']/i);
+  const urlMatches = text.match(/https?:\/\/[^\s"'()<>]+/gi) ?? [];
+  const candidates = [
+    markdownMatch?.[1],
+    metaMatch?.[1],
+    ...urlMatches,
+  ]
+    .map((candidate) => normalizeImageUrl(candidate, campaignUrl))
+    .filter(Boolean);
+
+  return candidates.find(isLikelyPreviewImageUrl) ?? null;
+}
+
+async function fetchKickstarterCampaignImageUrl(campaignUrl: string) {
+  try {
+    const response = await fetch(campaignUrl, {
+      headers: {
+        "User-Agent": "Event2People/1.0",
+        Accept: "text/html,application/xhtml+xml",
+      },
+      signal: AbortSignal.timeout(CAMPAIGN_IMAGE_REQUEST_TIMEOUT_MS),
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const html = await response.text();
+    const $ = load(html);
+    const candidates = [
+      $('meta[property="og:image"]').attr("content"),
+      $('meta[name="twitter:image"]').attr("content"),
+      $('meta[property="og:image:url"]').attr("content"),
+      ...$("img[src]")
+        .slice(0, 8)
+        .map((_, element) => $(element).attr("src"))
+        .get(),
+    ]
+      .map((candidate) => normalizeImageUrl(candidate, campaignUrl))
+      .filter(Boolean);
+
+    return candidates.find(isLikelyPreviewImageUrl) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function enrichKickstarterCampaignImage(campaign: KickstarterCampaign) {
+  if (campaign.imageUrl) {
+    return campaign;
+  }
+
+  const fetchedImageUrl = await fetchKickstarterCampaignImageUrl(campaign.campaignUrl);
+
+  if (!fetchedImageUrl) {
+    return campaign;
+  }
+
+  return {
+    ...campaign,
+    imageUrl: fetchedImageUrl,
+  };
+}
+
 export function parseKickstarterCampaignCandidate(
   result: TavilySearchResult,
   now = new Date(),
@@ -557,6 +655,7 @@ export function parseKickstarterCampaignCandidate(
   return {
     campaignName,
     campaignUrl,
+    imageUrl: extractPreviewImageUrlFromContent(result.content || result.title, campaignUrl),
     creatorName,
     creatorUrl: null,
     startedAt: startDate.startedAt,
@@ -581,12 +680,14 @@ function pickPreferredCampaign(current: KickstarterCampaign, candidate: Kickstar
     Number(current.pledgedAmount ?? -1) +
     Number(current.backersCount ?? 0) +
     (current.summaryRaw ? 1 : 0) +
-    (current.creatorName ? 1 : 0);
+    (current.creatorName ? 1 : 0) +
+    (current.imageUrl ? 1 : 0);
   const candidateScore =
     Number(candidate.pledgedAmount ?? -1) +
     Number(candidate.backersCount ?? 0) +
     (candidate.summaryRaw ? 1 : 0) +
-    (candidate.creatorName ? 1 : 0);
+    (candidate.creatorName ? 1 : 0) +
+    (candidate.imageUrl ? 1 : 0);
 
   if (candidateScore === currentScore) {
     return candidate.collectedAt.getTime() > current.collectedAt.getTime() ? candidate : current;
@@ -702,5 +803,5 @@ export async function fetchKickstarterCampaigns(limit = 10) {
     }
   }
 
-  return coalesceKickstarterCampaigns(candidates, limit);
+  return Promise.all(coalesceKickstarterCampaigns(candidates, limit).map((campaign) => enrichKickstarterCampaignImage(campaign)));
 }

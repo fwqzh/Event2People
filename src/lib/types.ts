@@ -120,6 +120,7 @@ export type EventInput = {
   displayRank: number;
   relatedRepoCount?: number | null;
   relatedPaperCount?: number | null;
+  previewImageUrl?: string | null;
 };
 
 export type PipelineEntrySeedInput = {

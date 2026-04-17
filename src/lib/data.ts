@@ -16,6 +16,7 @@ import { buildPersonLinks } from "@/lib/person-links";
 import { resolvePaperRuntimeMetadata, type ResolvedPaperRuntimeMetadata } from "@/lib/paper-runtime";
 import { prisma } from "@/lib/prisma";
 import { ensureActiveDataset, parseLinks, parseMetrics } from "@/lib/seed";
+import { getPreviewImageUrlFromSourceLinks, getVisibleSourceLinks } from "@/lib/source-links";
 import { clampPlainText, compactInstitution, formatDay, timeAgo } from "@/lib/text";
 import type {
   EventAnalysisView,
@@ -463,7 +464,7 @@ function buildPipelineFeaturedItem(
     };
   }
 
-  const sourceLink = parseLinks(event.sourceLinksJson)[0];
+  const sourceLink = getVisibleSourceLinks(parseLinks(event.sourceLinksJson))[0];
 
   if (!sourceLink) {
     return undefined;
@@ -565,7 +566,7 @@ function buildPipelineOriginalEventCard(
     title,
     summaryZh,
     timeAgo: timeAgo(event.timePrimary),
-    sourceLinks: parseLinks(event.sourceLinksJson).slice(0, 3),
+    sourceLinks: getVisibleSourceLinks(parseLinks(event.sourceLinksJson)).slice(0, 3),
   };
 }
 
@@ -671,6 +672,15 @@ function mapEventDetailPerson(
   };
 }
 
+function splitEventSourceLinks(value: Prisma.JsonValue) {
+  const sourceLinks = parseLinks(value);
+
+  return {
+    sourceLinks: getVisibleSourceLinks(sourceLinks),
+    previewImageUrl: getPreviewImageUrlFromSourceLinks(sourceLinks),
+  };
+}
+
 function mapEventSummary(
   event: HomepageEventRecord,
   savedPeople: Set<string>,
@@ -690,6 +700,7 @@ function mapEventSummary(
         ? buildArxivReadableSummary(event, papers[0], arxivNarrative, CARD_SOURCE_SUMMARY_LIMIT)
         : buildSourceSummary(event.sourceType, projects[0], papers[0], compactCopy(event.eventDetailSummaryZh) || safeHighlight, CARD_SOURCE_SUMMARY_LIMIT);
   const paperSummaryMetadata = event.sourceType === "arxiv" ? buildArxivSummaryMetadata(event, papers[0]) : null;
+  const { sourceLinks, previewImageUrl } = splitEventSourceLinks(event.sourceLinksJson);
 
   return {
     stableId: event.stableId,
@@ -702,7 +713,7 @@ function mapEventSummary(
     eventDetailSummaryZh: event.eventDetailSummaryZh,
     timePrimary: event.timePrimary,
     metrics: normalizeHomepageMetrics(event.sourceType, parseMetrics(event.metricsJson), projects),
-    sourceLinks: parseLinks(event.sourceLinksJson),
+    sourceLinks,
     peopleDetectionStatus: event.peopleDetectionStatus,
     projectStableIds: event.projectLinks.map((link) => link.project.stableId),
     paperStableIds: event.paperLinks.map((link) => link.paper.stableId),
@@ -718,6 +729,7 @@ function mapEventSummary(
     isNew: previousEventStableIds ? !previousEventStableIds.has(event.stableId) : false,
     cardSummary,
     paperSummaryMetadata,
+    previewImageUrl,
   };
 }
 
@@ -1107,7 +1119,7 @@ export async function getActiveEventAnalysisByStableId(stableId: string): Promis
       eventTag: event.eventTag,
       detailSummary: detail.detailSummary,
       metrics: parseMetrics(event.metricsJson),
-      sourceLinks: parseLinks(event.sourceLinksJson),
+      sourceLinks: getVisibleSourceLinks(parseLinks(event.sourceLinksJson)),
       people: event.personLinks.map((link) => ({
         name: link.person.name,
         identitySummaryZh: link.person.identitySummaryZh,

@@ -1362,6 +1362,17 @@ export function EventBoard({
                     </div>
 
                     <div className="event-card__body">
+                      {event.sourceType === "kickstarter" && event.previewImageUrl ? (
+                        <div className="event-card__media">
+                          <img
+                            className="event-card__media-image"
+                            src={event.previewImageUrl}
+                            alt={`${event.cardTitle} 产品预览`}
+                            loading="lazy"
+                            decoding="async"
+                          />
+                        </div>
+                      ) : null}
                         <div className="event-card__title-row">
                           <button
                           type="button"

@@ -23,6 +23,7 @@ import { fetchKickstarterCampaigns, type KickstarterCampaign } from "@/lib/sourc
 import { enrichGitHubProjectsWithNarrativeContext } from "@/lib/sources/github-project-search";
 import { enrichGitHubOwners, githubStableId } from "@/lib/sources/github-people";
 import { fetchGitHubTrendingRepos } from "@/lib/sources/github";
+import { appendPreviewImageSourceLink } from "@/lib/source-links";
 import { clampZh, formatDay, repoDisplayName, sentenceZh, slugify, uniqueStrings } from "@/lib/text";
 import type { DatasetBundleInput, EventInput, PaperInput, PersonInput, ProjectInput, RepoPaperLinkInput } from "@/lib/types";
 
@@ -780,10 +781,13 @@ function buildKickstarterEvents(campaigns: KickstarterCampaign[]) {
         metric("Backers", campaign.backersLabel || formatKickstarterCount(campaign.backersCount)),
         campaign.daysLeftLabel ? metric("Days Left", campaign.daysLeftLabel) : metric("Status", campaign.statusLabel || "Unknown"),
       ],
-      sourceLinks: uniqueLinkItems([
-        link("Kickstarter", campaign.campaignUrl),
-        ...(campaign.creatorUrl ? [link("Creator", campaign.creatorUrl)] : []),
-      ]),
+      sourceLinks: appendPreviewImageSourceLink(
+        uniqueLinkItems([
+          link("Kickstarter", campaign.campaignUrl),
+          ...(campaign.creatorUrl ? [link("Creator", campaign.creatorUrl)] : []),
+        ]),
+        campaign.imageUrl,
+      ),
       peopleDetectionStatus: personStableIds.length > 0 ? "partial" : "missing",
       projectStableIds: [],
       paperStableIds: [],
@@ -791,6 +795,7 @@ function buildKickstarterEvents(campaigns: KickstarterCampaign[]) {
       displayRank: index + 1,
       relatedRepoCount: 0,
       relatedPaperCount: 0,
+      previewImageUrl: campaign.imageUrl,
     } satisfies EventInput;
   });
 }

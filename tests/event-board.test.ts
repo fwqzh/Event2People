@@ -802,6 +802,27 @@ describe("EventBoard", () => {
     expect(screen.getByText("Started")).toBeInTheDocument();
   });
 
+  it("shows a kickstarter preview image when the card has one", () => {
+    render(
+      React.createElement(EventBoard, {
+        datasetVersionId: "dataset-kickstarter",
+        savedPersonStableIds: [],
+        githubEvents: [],
+        kickstarterEvents: [
+          createKickstarterSummaryEvent({
+            previewImageUrl: "https://images.example.com/orbital-coder.jpg",
+          }),
+        ],
+        arxivEvents: [],
+        visibleSources: ["kickstarter"],
+      }),
+    );
+
+    const previewImage = screen.getByAltText("Orbital Coder 产品预览");
+    expect(previewImage).toBeInTheDocument();
+    expect(previewImage).toHaveAttribute("src", "https://images.example.com/orbital-coder.jpg");
+  });
+
   it("marks only newly appeared cards with a NEW badge", async () => {
     vi.stubGlobal(
       "fetch",
