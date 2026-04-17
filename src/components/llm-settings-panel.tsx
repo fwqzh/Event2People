@@ -16,14 +16,6 @@ type LlmSettingsResponse = {
   settings?: LlmProviderSettingsSnapshot[];
 };
 
-function getProviderChoiceHint(snapshot: LlmProviderSettingsSnapshot) {
-  if (snapshot.configured) {
-    return "已保存";
-  }
-
-  return "只填 Key 也行";
-}
-
 function toInitialDraft(snapshot: LlmProviderSettingsSnapshot | undefined) {
   return {
     apiKey: "",
@@ -147,28 +139,30 @@ export function LlmSettingsPanel({ initialSnapshots }: LlmSettingsPanelProps) {
         </div>
       </div>
 
-      <div className="settings-provider-grid" aria-label="大模型 Provider 选择">
-        {snapshots.map((snapshot) => (
-          <button
-            key={snapshot.id}
-            type="button"
-            aria-pressed={selectedProviderId === snapshot.id}
-            className={`settings-provider-chip ${selectedProviderId === snapshot.id ? "is-active" : ""} ${
-              snapshot.configured ? "is-configured" : ""
-            }`}
-            onClick={() => setSelectedProviderId(snapshot.id)}
-          >
-            <strong>{snapshot.label}</strong>
-            {snapshot.configured ? <em>{getProviderChoiceHint(snapshot)}</em> : null}
-          </button>
-        ))}
-      </div>
-
       <div className="settings-provider-panel">
-        <h3>{activeSnapshot.label}</h3>
-        {activeSnapshot.configured ? <p className="settings-provider-panel__status">已保存</p> : null}
-
         <form className="settings-form" onSubmit={(event) => void handleSave(event)}>
+          <div className="settings-provider-picker">
+            <label className="settings-form__field">
+              <span>平台</span>
+              <div className="settings-select-wrap">
+                <select
+                  className="settings-select"
+                  value={selectedProviderId}
+                  onChange={(event) => setSelectedProviderId(event.target.value as LlmProviderId)}
+                  aria-label="选择大模型平台"
+                >
+                  {snapshots.map((snapshot) => (
+                    <option key={snapshot.id} value={snapshot.id}>
+                      {snapshot.label}
+                      {snapshot.configured ? " · 已保存" : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </label>
+            {activeSnapshot.configured ? <span className="settings-card__meta-pill is-configured">已保存</span> : null}
+          </div>
+
           <label className="settings-form__field">
             <span>{activeSnapshot.label} API Key</span>
             <input
