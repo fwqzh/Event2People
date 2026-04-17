@@ -171,13 +171,12 @@ export function LlmSettingsPanel({ initialSnapshots }: LlmSettingsPanelProps) {
         <span className="settings-card__meta-preview">本地设置优先于环境变量，清空后会自动回退</span>
       </div>
 
-      <div className="settings-provider-grid" role="tablist" aria-label="大模型 Provider 选择">
+      <div className="settings-provider-grid" aria-label="大模型 Provider 选择">
         {snapshots.map((snapshot) => (
           <button
             key={snapshot.id}
             type="button"
-            role="tab"
-            aria-selected={selectedProviderId === snapshot.id}
+            aria-pressed={selectedProviderId === snapshot.id}
             className={`settings-provider-chip ${selectedProviderId === snapshot.id ? "is-active" : ""} ${
               snapshot.configured ? "is-configured" : ""
             }`}

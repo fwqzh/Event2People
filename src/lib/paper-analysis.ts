@@ -1,6 +1,4 @@
-import OpenAI from "openai";
-
-import { getOpenAiClient, getOpenAiRuntimeConfig } from "@/lib/openai-runtime";
+import { getOpenAiClient } from "@/lib/openai-runtime";
 import { buildPaperExplanationZh, type PaperExplanationView } from "@/lib/paper-copy";
 import { fetchPaperChineseReferences } from "@/lib/sources/paper-search";
 import { clampPlainText } from "@/lib/text";
@@ -34,7 +32,6 @@ type PaperAnalysisResult = {
   analysisReferences: ReferenceItem[];
 };
 
-type ActiveOpenAiRuntimeConfig = Awaited<ReturnType<typeof getOpenAiRuntimeConfig>>;
 const analysisCache = new Map<string, { expiresAt: number; value: PaperAnalysisResult }>();
 
 function compactText(value: string | null | undefined) {

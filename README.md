@@ -59,4 +59,5 @@ npm run db:setup
 - All Chinese display copy is precomputed or template-generated before render.
 - When `OPENAI_API_KEY` is configured, refresh runs use the OpenAI Responses API to enrich event and person Chinese copy before publish.
 - Refresh uses dataset versioning so the UI keeps serving the previous active dataset until the new one is published.
-- Tavily key can also be set from the `/settings` page and is then stored only on the local machine under `.local/settings.json`.
+- `/settings` now supports local-only Tavily and mainstream LLM provider configuration, all stored under `.local/settings.json`.
+- The existing OpenAI enrichment flow will also prefer the OpenAI settings saved from `/settings` before falling back to environment variables.

@@ -502,6 +502,21 @@ function buildPipelineOriginalCardHref(event: PipelineEventRecord | undefined, f
   return `${getSourcePagePath(sourceType)}?event=${encodeURIComponent(stableId)}`;
 }
 
+function getPipelineSourceLabel(event: PipelineEventRecord | undefined, fallbackStableId: string) {
+  const sourceType = event?.sourceType ?? inferSourceTypeFromEventStableId(fallbackStableId);
+
+  switch (sourceType) {
+    case "github":
+      return "来源：GitHub";
+    case "arxiv":
+      return "来源：论文";
+    case "kickstarter":
+      return "来源：Kickstarter";
+    default:
+      return undefined;
+  }
+}
+
 function getGitHubNarrativeSummary(
   event: Pick<HomepageEventRecord, "eventDetailSummaryZh"> | Pick<ActiveEventRecord, "eventDetailSummaryZh">,
   project: ProjectRecord | undefined,
@@ -908,6 +923,7 @@ export async function getPipelineData() {
         notes: entry.notes,
         featuredItem: buildPipelineFeaturedItem(eventsMap.get(entry.savedFromEventStableId), entry.savedFromEventTitle),
         originalCardHref: buildPipelineOriginalCardHref(eventsMap.get(entry.savedFromEventStableId), entry.savedFromEventStableId),
+        sourceLabel: getPipelineSourceLabel(eventsMap.get(entry.savedFromEventStableId), entry.savedFromEventStableId),
         person,
         timeAgo: timeAgo(entry.savedAt),
       };

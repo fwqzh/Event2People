@@ -1,7 +1,6 @@
-import OpenAI from "openai";
 import { z } from "zod";
 
-import { env, hasOpenAiKey } from "@/lib/env";
+import { getOpenAiClient } from "@/lib/openai-runtime";
 import { assignEmailsToAuthors, extractAuthorContactProfilesFromText, extractInstitutionNamesFromText, extractPaperDataFromPdf } from "@/lib/pdf-paper-institutions";
 import { compactInstitution, uniqueStrings } from "@/lib/text";
 
@@ -50,25 +49,6 @@ type PaperRuntimeInput = {
 
 const runtimePaperCache = new Map<string, { expiresAt: number; value: ResolvedPaperRuntimeMetadata }>();
 const runtimePaperPendingCache = new Map<string, Promise<ResolvedPaperRuntimeMetadata>>();
-
-let clientSingleton: OpenAI | null | undefined;
-
-function getClient() {
-  if (!hasOpenAiKey) {
-    return null;
-  }
-
-  if (!clientSingleton) {
-    clientSingleton = new OpenAI({
-      apiKey: env.openAiApiKey,
-      ...(env.openAiBaseUrl ? { baseURL: env.openAiBaseUrl } : {}),
-      timeout: AI_REQUEST_TIMEOUT_MS,
-      maxRetries: 1,
-    });
-  }
-
-  return clientSingleton;
-}
 
 function compactText(value: string | null | undefined) {
   return value?.replace(/\s+/g, " ").trim() ?? "";
@@ -219,7 +199,10 @@ async function extractAuthorProfilesWithAi(pdfTextRaw: string, authors: string[]
     return [] satisfies ResolvedPaperAuthorProfile[];
   }
 
-  const client = getClient();
+  const { client, config } = await getOpenAiClient({
+    timeout: AI_REQUEST_TIMEOUT_MS,
+    maxRetries: 1,
+  });
 
   if (!client) {
     return [] satisfies ResolvedPaperAuthorProfile[];
@@ -227,7 +210,7 @@ async function extractAuthorProfilesWithAi(pdfTextRaw: string, authors: string[]
 
   const completion = await client.chat.completions.create(
     {
-      model: env.openAiModel,
+      model: config.model,
       temperature: 0,
       max_completion_tokens: 900,
       messages: [

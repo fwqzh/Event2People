@@ -1,6 +1,4 @@
-import OpenAI from "openai";
-
-import { env, hasOpenAiKey } from "@/lib/env";
+import { getOpenAiClient } from "@/lib/openai-runtime";
 import { fetchGitHubProjectChineseReferences } from "@/lib/sources/github-project-search";
 import { clampPlainText, repoDisplayName } from "@/lib/text";
 import type { MetricItem, ReferenceItem } from "@/lib/types";
@@ -35,25 +33,7 @@ type AnalysisResult = {
   analysisReferences: ReferenceItem[];
 };
 
-let clientSingleton: OpenAI | null | undefined;
 const analysisCache = new Map<string, { expiresAt: number; value: AnalysisResult }>();
-
-function getClient() {
-  if (!hasOpenAiKey) {
-    return null;
-  }
-
-  if (!clientSingleton) {
-    clientSingleton = new OpenAI({
-      apiKey: env.openAiApiKey,
-      ...(env.openAiBaseUrl ? { baseURL: env.openAiBaseUrl } : {}),
-      timeout: ANALYSIS_TIMEOUT_MS,
-      maxRetries: 1,
-    });
-  }
-
-  return clientSingleton;
-}
 
 function compactText(value: string | null | undefined) {
   return value?.replace(/\s+/g, " ").trim() ?? "";
@@ -152,25 +132,30 @@ export async function generateGitHubProjectAnalysis(input: AnalysisInput): Promi
   });
   const analysisReferences = referencesRaw.map(({ label, title, url }) => ({ label, title, url }));
 
-  if (!hasOpenAiKey || referencesRaw.length === 0) {
-    const fallback = {
-      analysisSummary: normalizeAnalysisSummary(buildFallbackAnalysis(input, analysisReferences)),
-      analysisReferences,
-    };
+  const fallback = {
+    analysisSummary: normalizeAnalysisSummary(buildFallbackAnalysis(input, analysisReferences)),
+    analysisReferences,
+  };
+
+  if (referencesRaw.length === 0) {
     analysisCache.set(cacheKey, { expiresAt: Date.now() + ANALYSIS_CACHE_TTL_MS, value: fallback });
     return fallback;
   }
 
-  const client = getClient();
+  const { client, config } = await getOpenAiClient({
+    timeout: ANALYSIS_TIMEOUT_MS,
+    maxRetries: 1,
+  });
 
   if (!client) {
-    return { analysisSummary: null, analysisReferences };
+    analysisCache.set(cacheKey, { expiresAt: Date.now() + ANALYSIS_CACHE_TTL_MS, value: fallback });
+    return fallback;
   }
 
   try {
     const completion = await client.chat.completions.create(
       {
-        model: env.openAiModel,
+        model: config.model,
         temperature: 0.3,
         max_completion_tokens: 900,
         messages: [
@@ -238,10 +223,6 @@ export async function generateGitHubProjectAnalysis(input: AnalysisInput): Promi
     analysisCache.set(cacheKey, { expiresAt: Date.now() + ANALYSIS_CACHE_TTL_MS, value: result });
     return result;
   } catch {
-    const fallback = {
-      analysisSummary: normalizeAnalysisSummary(buildFallbackAnalysis(input, analysisReferences)),
-      analysisReferences,
-    };
     analysisCache.set(cacheKey, { expiresAt: Date.now() + ANALYSIS_CACHE_TTL_MS, value: fallback });
     return fallback;
   }

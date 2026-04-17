@@ -3875,6 +3875,22 @@ body > .site-header {
   gap: 6px;
 }
 
+.pipeline-card__source-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-self: flex-start;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(16, 127, 122, 0.08);
+  color: var(--teal);
+  font-family: var(--font-mono), "SFMono-Regular", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
 .pipeline-card__role {
   margin: 0;
   color: var(--ink);

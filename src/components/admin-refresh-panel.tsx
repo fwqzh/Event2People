@@ -9,6 +9,7 @@ import type { RefreshStatusSnapshot } from "@/lib/refresh-progress";
 type AdminRefreshPanelProps = {
   aiEnabled: boolean;
   aiModel: string | null;
+  aiSource: "saved" | "env" | "none";
   runs: Array<{
     id: string;
     trigger: string;
@@ -19,7 +20,19 @@ type AdminRefreshPanelProps = {
   }>;
 };
 
-export function AdminRefreshPanel({ aiEnabled, aiModel, runs }: AdminRefreshPanelProps) {
+function getAiSourceLabel(source: AdminRefreshPanelProps["aiSource"]) {
+  if (source === "saved") {
+    return "本地设置";
+  }
+
+  if (source === "env") {
+    return "环境变量";
+  }
+
+  return "未配置";
+}
+
+export function AdminRefreshPanel({ aiEnabled, aiModel, aiSource, runs }: AdminRefreshPanelProps) {
   const router = useRouter();
   const pollTimerRef = useRef<number | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -148,7 +161,11 @@ export function AdminRefreshPanel({ aiEnabled, aiModel, runs }: AdminRefreshPane
           <h2>Refresh Dataset</h2>
           <p>手动触发 ingest → parse → normalize → link → enrich → validate → publish。</p>
           <p>后台已配置为每 60 分钟自动刷新一次。</p>
-          <p>{aiEnabled ? `OpenAI enrichment 已启用：${aiModel}` : "当前未配置 OPENAI_API_KEY，刷新会回退到模板文案。"}</p>
+          <p>
+            {aiEnabled
+              ? `OpenAI enrichment 已启用：${aiModel} · ${getAiSourceLabel(aiSource)}`
+              : "当前未配置 OpenAI API，刷新会回退到模板文案。"}
+          </p>
           {isRefreshing && snapshot ? <p>当前进度：{snapshot.label}</p> : null}
         </div>
         <button type="button" className="primary-button" disabled={isPending || isRefreshing} onClick={() => void handleRefresh()}>

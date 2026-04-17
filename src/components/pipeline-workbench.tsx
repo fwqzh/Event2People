@@ -110,6 +110,7 @@ export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
                 <div className="pipeline-card__content">
                   <header className="pipeline-card__header">
                     <div className="pipeline-card__headline">
+                      {entry.sourceLabel ? <span className="pipeline-card__source-pill">{entry.sourceLabel}</span> : null}
                       <h3>{entry.person.name}</h3>
                       {primaryAffiliation ? <p className="pipeline-card__role">{primaryAffiliation}</p> : null}
                     </div>

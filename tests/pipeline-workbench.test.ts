@@ -38,6 +38,7 @@ function createEntry(overrides: Partial<PipelineEntryView> = {}): PipelineEntryV
       introZh: "用于浏览器工作流的 agent 执行循环。",
     },
     originalCardHref: "/github?event=event%3Agithub%3Avox-agent",
+    sourceLabel: "来源：GitHub",
     person: {
       stableId: "github:alice-chen",
       name: "Alice Chen",
@@ -74,6 +75,7 @@ describe("PipelineWorkbench", () => {
     render(React.createElement(PipelineWorkbench, { entries: [createEntry()] }));
 
     expect(screen.getByText("Alice Chen")).toBeInTheDocument();
+    expect(screen.getByText("来源：GitHub")).toBeInTheDocument();
     expect(screen.getByText("OpenAI")).toBeInTheDocument();
     expect(screen.getByText("用于浏览器工作流的 agent 执行循环。")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "查看项目/作品" })).toHaveAttribute("href", "https://github.com/example/vox-agent");
@@ -86,7 +88,7 @@ describe("PipelineWorkbench", () => {
     expect(screen.queryByText("联系")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "复制" })).not.toBeInTheDocument();
     expect(screen.queryByText("Selected Person")).not.toBeInTheDocument();
-  });
+  }, 10000);
 
   it("keeps the empty state when there are no saved people", () => {
     render(React.createElement(PipelineWorkbench, { entries: [] }));

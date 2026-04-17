@@ -1,6 +1,4 @@
-import OpenAI from "openai";
-
-import { env, hasOpenAiKey } from "@/lib/env";
+import { getOpenAiClient } from "@/lib/openai-runtime";
 import { clampPlainText } from "@/lib/text";
 import type { MetricItem, ReferenceItem } from "@/lib/types";
 
@@ -31,25 +29,7 @@ type KickstarterAnalysisResult = {
   analysisReferences: ReferenceItem[];
 };
 
-let clientSingleton: OpenAI | null | undefined;
 const analysisCache = new Map<string, { expiresAt: number; value: KickstarterAnalysisResult }>();
-
-function getClient() {
-  if (!hasOpenAiKey) {
-    return null;
-  }
-
-  if (!clientSingleton) {
-    clientSingleton = new OpenAI({
-      apiKey: env.openAiApiKey,
-      ...(env.openAiBaseUrl ? { baseURL: env.openAiBaseUrl } : {}),
-      timeout: ANALYSIS_TIMEOUT_MS,
-      maxRetries: 1,
-    });
-  }
-
-  return clientSingleton;
-}
 
 function compactText(value: string | null | undefined) {
   return value?.replace(/\s+/g, " ").trim() ?? "";
@@ -192,21 +172,20 @@ export async function generateKickstarterCampaignAnalysis(
     analysisReferences,
   };
 
-  if (!hasOpenAiKey) {
-    analysisCache.set(cacheKey, { expiresAt: Date.now() + ANALYSIS_CACHE_TTL_MS, value: fallback });
-    return fallback;
-  }
-
-  const client = getClient();
+  const { client, config } = await getOpenAiClient({
+    timeout: ANALYSIS_TIMEOUT_MS,
+    maxRetries: 1,
+  });
 
   if (!client) {
+    analysisCache.set(cacheKey, { expiresAt: Date.now() + ANALYSIS_CACHE_TTL_MS, value: fallback });
     return fallback;
   }
 
   try {
     const completion = await client.chat.completions.create(
       {
-        model: env.openAiModel,
+        model: config.model,
         temperature: 0.45,
         max_completion_tokens: 700,
         messages: [
