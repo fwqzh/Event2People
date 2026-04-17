@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 
-import { env, hasOpenAiKey } from "@/lib/env";
+import { getOpenAiClient, getOpenAiRuntimeConfig } from "@/lib/openai-runtime";
 import { buildPaperExplanationZh, type PaperExplanationView } from "@/lib/paper-copy";
 import { fetchPaperChineseReferences } from "@/lib/sources/paper-search";
 import { clampPlainText } from "@/lib/text";
@@ -34,25 +34,8 @@ type PaperAnalysisResult = {
   analysisReferences: ReferenceItem[];
 };
 
-let clientSingleton: OpenAI | null | undefined;
+type ActiveOpenAiRuntimeConfig = Awaited<ReturnType<typeof getOpenAiRuntimeConfig>>;
 const analysisCache = new Map<string, { expiresAt: number; value: PaperAnalysisResult }>();
-
-function getClient() {
-  if (!hasOpenAiKey) {
-    return null;
-  }
-
-  if (!clientSingleton) {
-    clientSingleton = new OpenAI({
-      apiKey: env.openAiApiKey,
-      ...(env.openAiBaseUrl ? { baseURL: env.openAiBaseUrl } : {}),
-      timeout: ANALYSIS_TIMEOUT_MS,
-      maxRetries: 1,
-    });
-  }
-
-  return clientSingleton;
-}
 
 function compactText(value: string | null | undefined) {
   return value?.replace(/\s+/g, " ").trim() ?? "";
@@ -322,26 +305,19 @@ export async function generatePaperAnalysis(input: PaperAnalysisInput): Promise<
   ];
   const pdfContext = buildPaperPdfContext(input.paper.pdfTextRaw);
   const fallbackExplanation = buildFallbackPaperExplanation(input, analysisReferences);
-
-  if (!hasOpenAiKey) {
-    const fallbackResult = {
-      paperExplanation: fallbackExplanation,
-      analysisSummary: null,
-      analysisReferences,
-    };
-
-    analysisCache.set(cacheKey, { expiresAt: Date.now() + ANALYSIS_CACHE_TTL_MS, value: fallbackResult });
-    return fallbackResult;
-  }
-
-  const client = getClient();
+  const fallbackResult = {
+    paperExplanation: fallbackExplanation,
+    analysisSummary: null,
+    analysisReferences,
+  };
+  const { client, config } = await getOpenAiClient({
+    timeout: ANALYSIS_TIMEOUT_MS,
+    maxRetries: 1,
+  });
 
   if (!client) {
-    return {
-      paperExplanation: fallbackExplanation,
-      analysisSummary: null,
-      analysisReferences,
-    };
+    analysisCache.set(cacheKey, { expiresAt: Date.now() + ANALYSIS_CACHE_TTL_MS, value: fallbackResult });
+    return fallbackResult;
   }
 
   try {
@@ -363,7 +339,7 @@ export async function generatePaperAnalysis(input: PaperAnalysisInput): Promise<
     ];
     const completion = await client.chat.completions.create(
       {
-        model: env.openAiModel,
+        model: config.model,
         temperature: 0.15,
         max_completion_tokens: 1_300,
         messages: [
@@ -432,12 +408,6 @@ export async function generatePaperAnalysis(input: PaperAnalysisInput): Promise<
     analysisCache.set(cacheKey, { expiresAt: Date.now() + ANALYSIS_CACHE_TTL_MS, value: result });
     return result;
   } catch {
-    const fallbackResult = {
-      paperExplanation: fallbackExplanation,
-      analysisSummary: null,
-      analysisReferences,
-    };
-
     analysisCache.set(cacheKey, { expiresAt: Date.now() + ANALYSIS_CACHE_TTL_MS, value: fallbackResult });
     return fallbackResult;
   }

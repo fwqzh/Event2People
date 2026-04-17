@@ -49,7 +49,7 @@ describe("refresh dataset assembly", () => {
       {
         stableId: "github:alice-chen",
         name: "Alice Chen",
-        identitySummaryZh: "GitHub 构建者",
+        identitySummaryZh: "开源项目维护者",
         evidenceSummaryZh: "创建相关 repo",
         sourceUrls: ["https://github.com/alice-chen"],
         githubUrl: "https://github.com/alice-chen",

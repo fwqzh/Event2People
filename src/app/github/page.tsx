@@ -1,10 +1,10 @@
 import { EventBoard } from "@/components/event-board";
-import { getHomepageData } from "@/lib/data";
+import { getGitHubPageData } from "@/lib/data";
 
 export const dynamic = "force-dynamic";
 
 export default async function GitHubPage() {
-  const data = await getHomepageData();
+  const data = await getGitHubPageData();
 
   return (
     <div className="page-content">

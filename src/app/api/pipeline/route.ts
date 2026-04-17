@@ -20,6 +20,10 @@ function badRequest(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
 }
 
+function normalizeIdentitySummaryZh(value: string) {
+  return value.replace(/^GitHub 构建者$/u, "开源项目维护者");
+}
+
 function internalServerError(error: unknown) {
   return NextResponse.json(
     {
@@ -110,7 +114,7 @@ export async function POST(request: Request) {
     const personView = {
       stableId: person.stableId,
       name: person.name,
-      identitySummaryZh: person.identitySummaryZh,
+      identitySummaryZh: normalizeIdentitySummaryZh(person.identitySummaryZh),
       evidenceSummaryZh: person.evidenceSummaryZh,
       sourceUrls,
       githubUrl: person.githubUrl,

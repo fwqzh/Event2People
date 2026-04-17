@@ -155,6 +155,7 @@ describe("getPipelineData", () => {
       url: "https://github.com/example/vox-agent",
       introZh: "用于浏览器工作流的 agent 执行循环",
     });
+    expect(entries[0]?.originalCardHref).toBe("/github?event=event%3Agithub%3Avox-agent");
   });
 
   it("builds featuredItem for arXiv entries from the linked paper", async () => {
@@ -173,6 +174,7 @@ describe("getPipelineData", () => {
     expect(entries[0]?.featuredItem?.url).toBe("https://arxiv.org/abs/2604.12345");
     expect(entries[0]?.featuredItem?.introZh).toBeTruthy();
     expect(entries[0]?.featuredItem?.introZh).not.toBe("这是一条 fallback 高亮。");
+    expect(entries[0]?.originalCardHref).toBe("/arxiv?event=event%3Aarxiv%3Aagent-pipeline");
   });
 
   it("falls back to the source link when the event has no project or paper", async () => {
@@ -192,5 +194,6 @@ describe("getPipelineData", () => {
       url: "https://www.kickstarter.com/projects/example/orbital-coder",
       introZh: "一个面向开发者工具场景的众筹项目。",
     });
+    expect(entries[0]?.originalCardHref).toBe("/kickstarter?event=event%3Akickstarter%3Aorbital-coder");
   });
 });

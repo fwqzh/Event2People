@@ -37,6 +37,7 @@ function createEntry(overrides: Partial<PipelineEntryView> = {}): PipelineEntryV
       url: "https://github.com/example/vox-agent",
       introZh: "用于浏览器工作流的 agent 执行循环。",
     },
+    originalCardHref: "/github?event=event%3Agithub%3Avox-agent",
     person: {
       stableId: "github:alice-chen",
       name: "Alice Chen",
@@ -76,8 +77,11 @@ describe("PipelineWorkbench", () => {
     expect(screen.getByText("OpenAI")).toBeInTheDocument();
     expect(screen.getByText("用于浏览器工作流的 agent 执行循环。")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "查看项目/作品" })).toHaveAttribute("href", "https://github.com/example/vox-agent");
-    expect(screen.getByRole("link", { name: "GitHub" })).toHaveAttribute("href", "https://github.com/alice-chen");
-    expect(screen.getByRole("link", { name: "Email" })).toHaveAttribute("href", "mailto:alice@example.com");
+    expect(screen.getByRole("link", { name: "查看原始卡片" })).toHaveAttribute("href", "/github?event=event%3Agithub%3Avox-agent");
+    expect(screen.getByText("GitHub")).toBeInTheDocument();
+    expect(screen.getByText("Email")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "https://github.com/alice-chen" })).toHaveAttribute("href", "https://github.com/alice-chen");
+    expect(screen.getByRole("link", { name: "mailto:alice@example.com" })).toHaveAttribute("href", "mailto:alice@example.com");
     expect(screen.queryByRole("button", { name: "详情" })).not.toBeInTheDocument();
     expect(screen.queryByText("联系")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "复制" })).not.toBeInTheDocument();

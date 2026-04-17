@@ -990,6 +990,58 @@ describe("EventBoard", () => {
     expect(screen.getByText("Filtered Paper 22")).toBeInTheDocument();
   });
 
+  it("expands a deep-linked source card from the event query param", async () => {
+    mockPathname = "/github";
+    mockSearchParams = new URLSearchParams("event=event:github:repo-12");
+
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.includes("/api/pipeline")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ ok: true, savedPersonStableIds: [] }),
+        });
+      }
+
+      if (url.includes("/api/events/analysis")) {
+        return Promise.resolve(createAnalysisResponse());
+      }
+
+      return Promise.resolve(createResponse(createDetail()));
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const githubEvents = Array.from({ length: 12 }, (_, index) =>
+      createSummaryEvent({
+        stableId: `event:github:repo-${index + 1}`,
+        cardTitle: index === 11 ? "Deep Linked Repo" : `Repo ${index + 1}`,
+        eventTitleZh: index === 11 ? "Deep Linked Repo" : `Repo ${index + 1}`,
+        sourceLinks: [{ label: "GitHub", url: `https://github.com/example/repo-${index + 1}` }],
+        displayRank: index + 1,
+      }),
+    );
+
+    render(
+      React.createElement(EventBoard, {
+        datasetVersionId: "dataset-github",
+        savedPersonStableIds: [],
+        githubEvents,
+        arxivEvents: [],
+        visibleSources: ["github"],
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "收起 Deep Linked Repo" })).toBeInTheDocument();
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/events/detail?stableId=event%3Agithub%3Arepo-12"),
+      expect.anything(),
+    );
+  });
+
   it("filters arxiv papers by time and category, then syncs the URL and shows underflow guidance", async () => {
     vi.spyOn(Date, "now").mockReturnValue(new Date("2026-03-26T12:00:00.000Z").getTime());
     const user = userEvent.setup();

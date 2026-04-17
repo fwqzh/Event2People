@@ -160,7 +160,7 @@ function buildOwnerBasePerson(context: GitHubOwnerContext) {
   return {
     stableId: githubStableId(context.login),
     name: displayName,
-    identitySummaryZh: hasOwnerRole ? (ownerType === "Organization" ? "开源项目 · GitHub 维护者" : "GitHub 构建者") : "GitHub 核心贡献者",
+    identitySummaryZh: hasOwnerRole ? (ownerType === "Organization" ? "开源项目 · GitHub 维护者" : "开源项目维护者") : "GitHub 核心贡献者",
     evidenceSummaryZh: buildEvidenceSummary(context.repoRoles),
     sourceUrls: [context.ownerUrl],
     githubUrl: context.ownerUrl,

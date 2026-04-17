@@ -222,6 +222,7 @@ export type PipelineFeaturedItemView = {
 
 export type PipelineEntryView = PipelineEntrySeedInput & {
   featuredItem?: PipelineFeaturedItemView;
+  originalCardHref?: string;
   person: PersonView;
   timeAgo: string;
 };

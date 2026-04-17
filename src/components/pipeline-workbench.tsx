@@ -53,6 +53,7 @@ export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
         <div className="toolbar-card__copy">
           <span className="section-kicker">Action Workspace</span>
           <h2>Pipeline</h2>
+          <p>这是一个面向 GitHub、arXiv 和 Kickstarter 的前沿项目信号跟踪工具，用来把项目、论文、人物和后续跟进动作串起来。</p>
           <p>这里不再做“要不要跟进”的判断，只承接你已经确认值得继续追踪的人物与后续动作。</p>
         </div>
 
@@ -129,16 +130,24 @@ export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
                         </Link>
                       </div>
                     ) : null}
+                    {entry.originalCardHref ? (
+                      <Link href={entry.originalCardHref} className="pipeline-card__secondary-link">
+                        查看原始卡片
+                      </Link>
+                    ) : null}
                   </section>
 
                   <section className="pipeline-card__section">
                     <span className="pipeline-card__section-label">联系方式</span>
                     {entry.person.links.length > 0 ? (
-                      <div className="pipeline-card__link-list">
+                      <div className="pipeline-card__contact-list">
                         {entry.person.links.map((link) => (
-                          <Link key={link.url} href={link.url} target="_blank" rel="noreferrer" className="ghost-button">
-                            {link.label}
-                          </Link>
+                          <div key={link.url} className="pipeline-card__contact-item">
+                            <span className="pipeline-card__contact-label">{link.label}</span>
+                            <Link href={link.url} target="_blank" rel="noreferrer" className="pipeline-card__contact-url">
+                              {link.url}
+                            </Link>
+                          </div>
                         ))}
                       </div>
                     ) : (

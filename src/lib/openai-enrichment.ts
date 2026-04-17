@@ -2,8 +2,8 @@ import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import { z } from "zod";
 
-import { env, hasOpenAiKey } from "@/lib/env";
 import { looksLikeMalformedGitHubIntro } from "@/lib/github-copy";
+import { getOpenAiClient, getOpenAiRuntimeConfig } from "@/lib/openai-runtime";
 import { clampZh, repoDisplayName, sentenceZh } from "@/lib/text";
 import type { DatasetBundleInput, EventInput, PersonInput } from "@/lib/types";
 
@@ -57,28 +57,7 @@ type AiEnrichmentProgress = {
   totalItems: number;
 };
 
-let clientSingleton: OpenAI | null | undefined;
-
-function usesCompatibleChatApi() {
-  return Boolean(env.openAiBaseUrl);
-}
-
-function getClient() {
-  if (!hasOpenAiKey) {
-    return null;
-  }
-
-  if (!clientSingleton) {
-    clientSingleton = new OpenAI({
-      apiKey: env.openAiApiKey,
-      ...(env.openAiBaseUrl ? { baseURL: env.openAiBaseUrl } : {}),
-      timeout: AI_REQUEST_TIMEOUT_MS,
-      maxRetries: 1,
-    });
-  }
-
-  return clientSingleton;
-}
+type ActiveOpenAiRuntimeConfig = Awaited<ReturnType<typeof getOpenAiRuntimeConfig>>;
 
 function contentToString(
   content:
@@ -358,15 +337,20 @@ function buildPersonFacts(people: PersonInput[], bundle: DatasetBundleInput) {
   });
 }
 
-async function enrichEventBatch(client: OpenAI, events: EventInput[], bundle: DatasetBundleInput) {
+async function enrichEventBatch(
+  client: OpenAI,
+  runtimeConfig: ActiveOpenAiRuntimeConfig,
+  events: EventInput[],
+  bundle: DatasetBundleInput,
+) {
   if (events.length === 0) {
     return { events, enrichedCount: 0 };
   }
 
-  if (usesCompatibleChatApi()) {
+  if (runtimeConfig.usesCompatibleChatApi) {
     const completion = await client.chat.completions.create(
       {
-        model: env.openAiModel,
+        model: runtimeConfig.model,
         temperature: 0.3,
         max_completion_tokens: 1400,
         messages: [
@@ -416,7 +400,7 @@ async function enrichEventBatch(client: OpenAI, events: EventInput[], bundle: Da
 
   const response = await client.responses.parse(
     {
-      model: env.openAiModel,
+      model: runtimeConfig.model,
       instructions: [
         "你是 Frontier Event-to-People 产品的后台中文编辑器。",
         "你的任务是只基于给定结构化事实，生成克制、准确、可追溯的简体中文短文案。",
@@ -456,15 +440,20 @@ async function enrichEventBatch(client: OpenAI, events: EventInput[], bundle: Da
   return normalizeEventBatch(events, response.output_parsed ?? { items: [] });
 }
 
-async function enrichPersonBatch(client: OpenAI, people: PersonInput[], bundle: DatasetBundleInput) {
+async function enrichPersonBatch(
+  client: OpenAI,
+  runtimeConfig: ActiveOpenAiRuntimeConfig,
+  people: PersonInput[],
+  bundle: DatasetBundleInput,
+) {
   if (people.length === 0) {
     return { people, enrichedCount: 0 };
   }
 
-  if (usesCompatibleChatApi()) {
+  if (runtimeConfig.usesCompatibleChatApi) {
     const completion = await client.chat.completions.create(
       {
-        model: env.openAiModel,
+        model: runtimeConfig.model,
         temperature: 0.3,
         max_completion_tokens: 1400,
         messages: [
@@ -504,7 +493,7 @@ async function enrichPersonBatch(client: OpenAI, people: PersonInput[], bundle: 
 
   const response = await client.responses.parse(
     {
-      model: env.openAiModel,
+      model: runtimeConfig.model,
       instructions: [
         "你是 Frontier Event-to-People 产品的后台中文编辑器。",
         "你的任务是只基于给定结构化事实，生成简体中文的人物身份摘要和证据摘要。",
@@ -542,7 +531,10 @@ export async function enrichBundleWithOpenAI(
     onProgress?: (progress: AiEnrichmentProgress) => void | Promise<void>;
   },
 ): Promise<AiEnrichmentResult> {
-  const client = getClient();
+  const { client, config } = await getOpenAiClient({
+    timeout: AI_REQUEST_TIMEOUT_MS,
+    maxRetries: 1,
+  });
 
   if (!client) {
     return {
@@ -569,7 +561,7 @@ export async function enrichBundleWithOpenAI(
     let completedItems = 0;
 
     for (const eventBatch of eventBatches) {
-      const result = await enrichEventBatch(client, eventBatch, {
+      const result = await enrichEventBatch(client, config, eventBatch, {
         ...bundle,
         events,
         people,
@@ -597,7 +589,7 @@ export async function enrichBundleWithOpenAI(
       let completedItems = 0;
 
       for (const personBatch of personBatches) {
-        const result = await enrichPersonBatch(client, personBatch, {
+        const result = await enrichPersonBatch(client, config, personBatch, {
           ...bundle,
           events,
           people,
@@ -627,7 +619,7 @@ export async function enrichBundleWithOpenAI(
       people,
     },
     enabled: true,
-    model: env.openAiModel,
+    model: config.model,
     eventCount,
     personCount,
     errors,

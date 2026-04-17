@@ -161,6 +161,10 @@ const DETAIL_SOURCE_SUMMARY_LIMIT = 560;
 const HOMEPAGE_VISIBLE_LIMIT = 10;
 const countFormatter = new Intl.NumberFormat("en-US");
 
+function normalizeIdentitySummaryZh(value: string) {
+  return value.replace(/^GitHub 构建者$/u, "开源项目维护者");
+}
+
 function normalizeHomepageMetrics(
   sourceType: "github" | "kickstarter" | "arxiv",
   metrics: Array<{ label: string; value: string }>,
@@ -471,6 +475,33 @@ function buildPipelineFeaturedItem(
   };
 }
 
+function getSourcePagePath(sourceType: "github" | "kickstarter" | "arxiv") {
+  switch (sourceType) {
+    case "github":
+      return "/github";
+    case "kickstarter":
+      return "/kickstarter";
+    case "arxiv":
+      return "/arxiv";
+  }
+}
+
+function inferSourceTypeFromEventStableId(stableId: string) {
+  const [, sourceType] = stableId.split(":");
+  return sourceType === "github" || sourceType === "kickstarter" || sourceType === "arxiv" ? sourceType : null;
+}
+
+function buildPipelineOriginalCardHref(event: PipelineEventRecord | undefined, fallbackStableId: string) {
+  const sourceType = event?.sourceType ?? inferSourceTypeFromEventStableId(fallbackStableId);
+
+  if (!sourceType) {
+    return undefined;
+  }
+
+  const stableId = event?.stableId ?? fallbackStableId;
+  return `${getSourcePagePath(sourceType)}?event=${encodeURIComponent(stableId)}`;
+}
+
 function getGitHubNarrativeSummary(
   event: Pick<HomepageEventRecord, "eventDetailSummaryZh"> | Pick<ActiveEventRecord, "eventDetailSummaryZh">,
   project: ProjectRecord | undefined,
@@ -511,7 +542,7 @@ function mapPerson(person: PersonRecord): PersonView {
   return {
     stableId: person.stableId,
     name: person.name,
-    identitySummaryZh: person.identitySummaryZh,
+    identitySummaryZh: normalizeIdentitySummaryZh(person.identitySummaryZh),
     evidenceSummaryZh: person.evidenceSummaryZh,
     sourceUrls,
     githubUrl: person.githubUrl,
@@ -795,6 +826,13 @@ export async function getHomepageData() {
   });
 }
 
+export async function getGitHubPageData() {
+  return getBoardData({
+    kickstarterLimit: 0,
+    arxivLimit: 0,
+  });
+}
+
 export async function getArxivPageData() {
   return getBoardData({
     githubLimit: 0,
@@ -805,7 +843,6 @@ export async function getArxivPageData() {
 export async function getKickstarterPageData() {
   return getBoardData({
     githubLimit: 0,
-    kickstarterLimit: HOMEPAGE_VISIBLE_LIMIT,
     arxivLimit: 0,
   });
 }
@@ -870,6 +907,7 @@ export async function getPipelineData() {
         lastContactedAt: entry.lastContactedAt,
         notes: entry.notes,
         featuredItem: buildPipelineFeaturedItem(eventsMap.get(entry.savedFromEventStableId), entry.savedFromEventTitle),
+        originalCardHref: buildPipelineOriginalCardHref(eventsMap.get(entry.savedFromEventStableId), entry.savedFromEventStableId),
         person,
         timeAgo: timeAgo(entry.savedAt),
       };

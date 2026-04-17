@@ -192,6 +192,7 @@ export function EventBoard({
   const searchParamsTime = searchParams.get("time");
   const searchParamsTopic = searchParams.get("topic");
   const searchParamsCategories = searchParams.get("categories");
+  const searchParamsEvent = searchParams.get("event");
   const [serverSavedPersonIds, setServerSavedPersonIds] = useState<string[]>(savedPersonStableIds);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [isExpandedIdHydrated, setIsExpandedIdHydrated] = useState(false);
@@ -615,7 +616,50 @@ export function EventBoard({
   }, [arxivCategories, arxivTimeWindow, enableArxivFilters]);
 
   useEffect(() => {
+    const deepLinkedEventId = compactFilterValue(searchParamsEvent);
+
+    if (!deepLinkedEventId) {
+      return;
+    }
+
+    const source = eventSourceById.get(deepLinkedEventId);
+
+    if (!source) {
+      return;
+    }
+
+    const sourceEvents =
+      source === "github"
+        ? githubEvents
+        : source === "kickstarter"
+          ? kickstarterEvents
+          : enableArxivFilters
+            ? filteredArxivEvents
+            : arxivEvents;
+    const eventIndex = sourceEvents.findIndex((event) => event.stableId === deepLinkedEventId);
+
+    if (eventIndex < 0) {
+      return;
+    }
+
+    setVisibleCounts((current) => {
+      const nextVisibleCount = Math.max(current[source], eventIndex + 1);
+
+      return nextVisibleCount === current[source] ? current : { ...current, [source]: nextVisibleCount };
+    });
+    setCollapsedSections((current) => (current[source] ? { ...current, [source]: false } : current));
+  }, [arxivEvents, enableArxivFilters, eventSourceById, filteredArxivEvents, githubEvents, kickstarterEvents, searchParamsEvent, visibleCounts]);
+
+  useEffect(() => {
     if (isExpandedIdHydrated) {
+      return;
+    }
+
+    const deepLinkedEventId = compactFilterValue(searchParamsEvent);
+
+    if (deepLinkedEventId && renderedSectionEvents.some((event) => event.stableId === deepLinkedEventId)) {
+      setExpandedId(deepLinkedEventId);
+      setIsExpandedIdHydrated(true);
       return;
     }
 
@@ -628,7 +672,7 @@ export function EventBoard({
     }
 
     setIsExpandedIdHydrated(true);
-  }, [isExpandedIdHydrated, renderedSectionEvents]);
+  }, [isExpandedIdHydrated, renderedSectionEvents, searchParamsEvent]);
 
   useEffect(() => {
     if (!isExpandedIdHydrated) {
