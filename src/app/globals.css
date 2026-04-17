@@ -574,6 +574,22 @@ select {
   text-transform: uppercase;
 }
 
+.event-card__new-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(188, 120, 44, 0.28);
+  background: rgba(255, 242, 221, 0.92);
+  color: rgba(155, 92, 22, 0.96);
+  font-family: var(--font-mono), "SFMono-Regular", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
 .event-card h3,
 .pipeline-card h3,
 .detail-workbench h3 {
@@ -3680,6 +3696,92 @@ body > .site-header {
 .link-list--stacked a,
 .detail-workbench .link-list--stacked a {
   color: var(--teal);
+}
+
+.pipeline-grid--single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.pipeline-list--stacked {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+}
+
+.pipeline-card--simple {
+  padding: 24px;
+}
+
+.pipeline-card--simple .pipeline-card__content {
+  display: grid;
+  gap: 18px;
+}
+
+.pipeline-card--simple .pipeline-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-right: 38px;
+}
+
+.pipeline-card__headline {
+  display: grid;
+  gap: 6px;
+}
+
+.pipeline-card__role {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.98rem;
+  line-height: 1.5;
+  font-weight: 600;
+}
+
+.pipeline-card__summary {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.pipeline-card__section {
+  display: grid;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(16, 32, 51, 0.08);
+}
+
+.pipeline-card__section-label {
+  color: var(--teal);
+  font-family: var(--font-mono), "SFMono-Regular", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.pipeline-card__item-title {
+  color: var(--ink);
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+.pipeline-card__section p,
+.pipeline-card__muted {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.pipeline-card__link-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.pipeline-card__link-list .ghost-button,
+.pipeline-card__section .ghost-button {
+  width: auto;
 }
 
 .toolbar-card--board {

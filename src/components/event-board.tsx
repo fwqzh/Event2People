@@ -1308,6 +1308,11 @@ export function EventBoard({
                     <div className="event-card__header">
                       <div className="event-card__tag-row">
                         <div className="event-card__tag">{event.eventTag}</div>
+                        {event.isNew ? (
+                          <span className="event-card__new-pill" aria-label="新出现的事件">
+                            NEW
+                          </span>
+                        ) : null}
                         <span className="data-pill">{event.timeAgo}</span>
                       </div>
                     </div>

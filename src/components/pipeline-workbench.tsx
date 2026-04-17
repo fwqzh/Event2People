@@ -1,10 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { buildPipelinePageCopy } from "@/lib/copy";
-import type { PipelineEntryView } from "@/lib/types";
+import type { PersonView, PipelineEntryView } from "@/lib/types";
 
 type PipelineWorkbenchProps = {
   entries: PipelineEntryView[];
@@ -12,19 +12,15 @@ type PipelineWorkbenchProps = {
 
 export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
   const [localEntries, setLocalEntries] = useState(entries);
-  const [selectedId, setSelectedId] = useState<string | null>(entries[0]?.personStableId ?? null);
   const [status, setStatus] = useState("");
-  const selectedEntry = useMemo(
-    () => localEntries.find((entry) => entry.personStableId === selectedId) ?? localEntries[0] ?? null,
-    [localEntries, selectedId],
-  );
-  const contactableCount = useMemo(() => localEntries.filter((entry) => entry.person.links.length > 0).length, [localEntries]);
+  const contactableCount = localEntries.filter((entry) => entry.person.links.length > 0).length;
 
-  function getPersonMeta(entry: PipelineEntryView) {
-    return [
-      entry.person.organizationNamesRaw?.[0] ?? entry.person.schoolNamesRaw?.[0] ?? entry.person.labNamesRaw?.[0] ?? "",
-      entry.person.email ? `Email: ${entry.person.email}` : "",
-    ].filter(Boolean);
+  function getPrimaryAffiliation(person: PersonView) {
+    return person.organizationNamesRaw?.[0] ?? person.schoolNamesRaw?.[0] ?? person.labNamesRaw?.[0] ?? "";
+  }
+
+  function shouldShowIdentitySummary(entry: PipelineEntryView, primaryAffiliation: string) {
+    return Boolean(entry.person.identitySummaryZh && entry.person.identitySummaryZh !== primaryAffiliation);
   }
 
   async function copyText(text: string, successMessage: string) {
@@ -47,17 +43,7 @@ export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
     }
 
     setLocalEntries((current) => {
-      const next = current.filter((entry) => entry.personStableId !== personStableId);
-
-      setSelectedId((selected) => {
-        if (selected !== personStableId) {
-          return selected;
-        }
-
-        return next[0]?.personStableId ?? null;
-      });
-
-      return next;
+      return current.filter((entry) => entry.personStableId !== personStableId);
     });
   }
 
@@ -97,16 +83,14 @@ export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
         </div>
       </div>
 
-      <div className="pipeline-grid">
-        <div className="pipeline-list">
+      <div className="pipeline-grid pipeline-grid--single">
+        <div className="pipeline-list pipeline-list--stacked">
           {localEntries.map((entry) => {
-            const personMeta = getPersonMeta(entry);
+            const primaryAffiliation = getPrimaryAffiliation(entry.person);
+            const showIdentitySummary = shouldShowIdentitySummary(entry, primaryAffiliation);
 
             return (
-              <article
-                key={entry.personStableId}
-                className={`pipeline-card ${selectedEntry?.personStableId === entry.personStableId ? "is-selected" : ""}`}
-              >
+              <article key={entry.personStableId} className="pipeline-card pipeline-card--simple">
                 <button
                   type="button"
                   className="pipeline-remove-button"
@@ -122,126 +106,52 @@ export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
                   </span>
                   <span className="pipeline-remove-button__label">移除出Pipeline</span>
                 </button>
-                <button type="button" className="pipeline-card__body" onClick={() => setSelectedId(entry.personStableId)}>
-                  <span className="pipeline-card__eyebrow">{entry.timeAgo} 加入</span>
-                  <h3>{entry.person.name}</h3>
-                  <p>{entry.person.identitySummaryZh}</p>
-                  {personMeta.length > 0 ? (
-                    <div className="person-card__meta-row">
-                      {personMeta.map((item) => (
-                        <span key={`${entry.personStableId}-${item}`} className="person-card__meta-pill">
-                          {item}
-                        </span>
-                      ))}
+                <div className="pipeline-card__content">
+                  <header className="pipeline-card__header">
+                    <div className="pipeline-card__headline">
+                      <h3>{entry.person.name}</h3>
+                      {primaryAffiliation ? <p className="pipeline-card__role">{primaryAffiliation}</p> : null}
                     </div>
-                  ) : null}
-                  <span>来源事件：{entry.savedFromEventTitle}</span>
-                  <strong>{entry.recentActivitySummaryZh}</strong>
-                </button>
+                  </header>
 
-                <div className="pipeline-card__actions">
-                  <button
-                    type="button"
-                    className="ghost-button"
-                    onClick={() => void copyText(entry.copySummaryShortZh ?? "", `已复制 ${entry.person.name}`)}
-                  >
-                    复制
-                  </button>
+                  {showIdentitySummary ? <p className="pipeline-card__summary">{entry.person.identitySummaryZh}</p> : null}
 
-                  <details className="contact-menu">
-                    <summary>联系</summary>
-                    <div className="contact-menu__panel">
-                      {entry.person.links.length > 0 ? (
-                        entry.person.links.map((link) => (
-                          <Link key={link.url} href={link.url} target="_blank" rel="noreferrer">
+                  <section className="pipeline-card__section">
+                    <span className="pipeline-card__section-label">项目/作品</span>
+                    <strong className="pipeline-card__item-title">
+                      {entry.featuredItem?.title ?? entry.savedFromEventTitle}
+                    </strong>
+                    <p>{entry.featuredItem?.introZh ?? entry.person.identitySummaryZh}</p>
+                    {entry.featuredItem?.url ? (
+                      <div className="pipeline-card__actions">
+                        <Link href={entry.featuredItem.url} target="_blank" rel="noreferrer" className="ghost-button">
+                          查看项目/作品
+                        </Link>
+                      </div>
+                    ) : null}
+                  </section>
+
+                  <section className="pipeline-card__section">
+                    <span className="pipeline-card__section-label">联系方式</span>
+                    {entry.person.links.length > 0 ? (
+                      <div className="pipeline-card__link-list">
+                        {entry.person.links.map((link) => (
+                          <Link key={link.url} href={link.url} target="_blank" rel="noreferrer" className="ghost-button">
                             {link.label}
                           </Link>
-                        ))
-                      ) : (
-                        <span>暂无可用联系渠道</span>
-                      )}
-                    </div>
-                  </details>
-
-                  <button type="button" className="ghost-button" onClick={() => setSelectedId(entry.personStableId)}>
-                    详情
-                  </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="pipeline-card__muted">暂无可用联系渠道</p>
+                    )}
+                  </section>
                 </div>
               </article>
             );
           })}
           {localEntries.length === 0 ? <div className="empty-state">当前 Pipeline 为空。</div> : null}
-        </div>
-
-        <aside className="detail-workbench">
-          {selectedEntry ? (
-            (() => {
-              const personMeta = getPersonMeta(selectedEntry);
-
-              return (
-                <>
-                  <span className="section-kicker">Selected Person</span>
-                  <h3>{selectedEntry.person.name}</h3>
-                  <p>{selectedEntry.person.identitySummaryZh}</p>
-                  {personMeta.length > 0 ? (
-                    <div className="person-card__meta-row">
-                      {personMeta.map((item) => (
-                        <span key={`${selectedEntry.personStableId}-detail-${item}`} className="person-card__meta-pill">
-                          {item}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  <section className="detail-panel">
-                    <h5>来源事件</h5>
-                    <p>{selectedEntry.savedFromEventTitle}</p>
-                  </section>
-
-                  <section className="detail-panel">
-                    <h5>证据</h5>
-                    <p>{selectedEntry.person.evidenceSummaryZh}</p>
-                  </section>
-
-                  <section className="detail-panel">
-                    <h5>最近活动</h5>
-                    <p>{selectedEntry.recentActivitySummaryZh}</p>
-                  </section>
-
-                  <section className="detail-panel">
-                    <h5>联系渠道</h5>
-                    <div className="link-list">
-                      {selectedEntry.person.links.length > 0 ? (
-                        selectedEntry.person.links.map((link) => (
-                          <Link key={link.url} href={link.url} target="_blank" rel="noreferrer">
-                            {link.label}
-                          </Link>
-                        ))
-                      ) : (
-                        <span className="empty-state">暂无可用联系渠道</span>
-                      )}
-                    </div>
-                  </section>
-
-                  <section className="detail-panel">
-                    <h5>复制摘要</h5>
-                    <button
-                      type="button"
-                      className="primary-button"
-                      onClick={() => void copyText(selectedEntry.copySummaryFullZh ?? "", `已复制 ${selectedEntry.person.name} 的完整摘要`)}
-                    >
-                      复制完整摘要
-                    </button>
-                  </section>
-                </>
-              );
-            })()
-          ) : (
-            <div className="empty-state">尚未保存任何人物。</div>
-          )}
-
           {status ? <p className="status-text">{status}</p> : null}
-        </aside>
+        </div>
       </div>
     </div>
   );

@@ -169,6 +169,7 @@ export type EventSummaryView = EventInput & {
   previewPeople: PersonPreviewView[];
   peopleCount: number;
   isSaved: boolean;
+  isNew: boolean;
   cardSummary: string;
   paperSummaryMetadata?: {
     publishedAtLabel: string;
@@ -213,7 +214,14 @@ export type EventAnalysisView = {
   paperExplanation?: PaperExplanationView | null;
 };
 
+export type PipelineFeaturedItemView = {
+  title: string;
+  url: string;
+  introZh: string;
+};
+
 export type PipelineEntryView = PipelineEntrySeedInput & {
+  featuredItem?: PipelineFeaturedItemView;
   person: PersonView;
   timeAgo: string;
 };

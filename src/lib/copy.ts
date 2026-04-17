@@ -4,6 +4,10 @@ function formatLinks(links: LinkItem[]) {
   return links.map((link) => `${link.label}: ${link.url}`).join("\n");
 }
 
+function getPrimaryAffiliation(person: PersonView) {
+  return person.organizationNamesRaw?.[0] ?? person.schoolNamesRaw?.[0] ?? person.labNamesRaw?.[0] ?? "";
+}
+
 export function buildPersonCopySummary(person: PersonView, sourceTitle: string, recentActivitySummaryZh: string) {
   const lines = [
     person.name,
@@ -22,14 +26,17 @@ export function buildPersonCopySummary(person: PersonView, sourceTitle: string, 
 
 export function buildPipelinePageCopy(entries: PipelineEntryView[]) {
   const sections = entries.map((entry, index) => {
-    const compactLinks = entry.person.links.map((link) => link.label).join(" / ");
+    const contactLabels = entry.person.links.map((link) => link.label).join(" / ");
+    const affiliation = getPrimaryAffiliation(entry.person);
+    const featuredTitle = entry.featuredItem?.title ?? entry.savedFromEventTitle;
 
     return [
       `${index + 1}. ${entry.person.name}`,
-      `- ${entry.person.identitySummaryZh}`,
-      `- 来源：${entry.savedFromEventTitle}`,
-      `- 最近活动：${entry.recentActivitySummaryZh}`,
-      compactLinks ? `- 链接：${compactLinks}` : undefined,
+      affiliation ? `- 身份：${affiliation}` : `- ${entry.person.identitySummaryZh}`,
+      `- 项目/作品：${featuredTitle}`,
+      entry.featuredItem?.introZh ? `- 简介：${entry.featuredItem.introZh}` : undefined,
+      entry.featuredItem?.url ? `- 链接：${entry.featuredItem.url}` : undefined,
+      contactLabels ? `- 联系方式：${contactLabels}` : undefined,
     ]
       .filter(Boolean)
       .join("\n");

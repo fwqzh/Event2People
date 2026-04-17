@@ -17,7 +17,16 @@ import { resolvePaperRuntimeMetadata, type ResolvedPaperRuntimeMetadata } from "
 import { prisma } from "@/lib/prisma";
 import { ensureActiveDataset, parseLinks, parseMetrics } from "@/lib/seed";
 import { clampPlainText, compactInstitution, formatDay, timeAgo } from "@/lib/text";
-import type { EventAnalysisView, EventDetailPersonView, EventDetailView, EventSummaryView, PersonPreviewView, PersonView, PipelineEntryView } from "@/lib/types";
+import type {
+  EventAnalysisView,
+  EventDetailPersonView,
+  EventDetailView,
+  EventSummaryView,
+  PersonPreviewView,
+  PersonView,
+  PipelineEntryView,
+  PipelineFeaturedItemView,
+} from "@/lib/types";
 
 type PersonRecord = {
   stableId: string;
@@ -119,6 +128,21 @@ type ActiveEventRecord = Prisma.EventGetPayload<{
         person: true;
       };
     };
+    projectLinks: {
+      include: {
+        project: true;
+      };
+    };
+    paperLinks: {
+      include: {
+        paper: true;
+      };
+    };
+  };
+}>;
+
+type PipelineEventRecord = Prisma.EventGetPayload<{
+  include: {
     projectLinks: {
       include: {
         project: true;
@@ -403,6 +427,50 @@ function buildArxivMetadata(
   };
 }
 
+function buildPipelineFeaturedItem(
+  event: PipelineEventRecord | undefined,
+  fallbackTitle: string,
+): PipelineFeaturedItemView | undefined {
+  if (!event) {
+    return undefined;
+  }
+
+  const project = event.projectLinks[0]?.project;
+
+  if (event.sourceType === "github" && project) {
+    return {
+      title: project.repoName,
+      url: project.repoUrl,
+      introZh: buildGitHubProjectIntroZh(project, event.eventTag),
+    };
+  }
+
+  const paper = event.paperLinks[0]?.paper;
+
+  if (event.sourceType === "arxiv" && paper) {
+    return {
+      title: paper.paperTitle,
+      url: paper.paperUrl,
+      introZh:
+        compactCopy(buildArxivNarrative(event, paper).lead) ||
+        compactCopy(event.eventHighlightZh) ||
+        paper.paperTitle,
+    };
+  }
+
+  const sourceLink = parseLinks(event.sourceLinksJson)[0];
+
+  if (!sourceLink) {
+    return undefined;
+  }
+
+  return {
+    title: compactCopy(event.eventTitleZh) || fallbackTitle,
+    url: sourceLink.url,
+    introZh: compactCopy(event.eventHighlightZh) || fallbackTitle,
+  };
+}
+
 function getGitHubNarrativeSummary(
   event: Pick<HomepageEventRecord, "eventDetailSummaryZh"> | Pick<ActiveEventRecord, "eventDetailSummaryZh">,
   project: ProjectRecord | undefined,
@@ -508,6 +576,7 @@ function mapEventDetailPerson(
 function mapEventSummary(
   event: HomepageEventRecord,
   savedPeople: Set<string>,
+  previousEventStableIds: Set<string> | null,
 ): EventSummaryView {
   const projects = event.projectLinks.map((link) => link.project);
   const papers = event.paperLinks.map((link) => link.paper);
@@ -548,6 +617,7 @@ function mapEventSummary(
     previewPeople: event.personLinks.slice(0, 3).map((link) => mapPersonPreview(link.person)),
     peopleCount: event.personLinks.length,
     isSaved: event.personLinks.some((link) => savedPeople.has(link.person.stableId)),
+    isNew: previousEventStableIds ? !previousEventStableIds.has(event.stableId) : false,
     cardSummary,
     paperSummaryMetadata,
   };
@@ -617,51 +687,76 @@ async function mapEventDetail(
 
 async function getBoardData(options?: { githubLimit?: number; kickstarterLimit?: number; arxivLimit?: number }) {
   const activeDataset = await ensureActiveDataset(prisma);
-  const savedEntries = await prisma.pipelineEntry.findMany({
-    select: { personStableId: true },
-  });
+  const [savedEntries, previousDataset] = await Promise.all([
+    prisma.pipelineEntry.findMany({
+      select: { personStableId: true },
+    }),
+    prisma.datasetVersion.findFirst({
+      where: {
+        id: { not: activeDataset.id },
+        publishedAt: { not: null },
+      },
+      orderBy: { publishedAt: "desc" },
+      select: { id: true },
+    }),
+  ]);
   const savedPeople = new Set(savedEntries.map((entry) => entry.personStableId));
 
-  const events = await prisma.event.findMany({
-    where: {
-      datasetVersionId: activeDataset.id,
-    },
-    include: {
-      projectLinks: {
-        include: {
-          project: true,
-        },
-      },
-      paperLinks: {
-        include: {
-          paper: true,
-        },
-      },
-    personLinks: {
-      orderBy: {
-        position: "asc",
+  const [events, previousEvents] = await Promise.all([
+    prisma.event.findMany({
+      where: {
+        datasetVersionId: activeDataset.id,
       },
       include: {
-        person: {
-          select: {
-              stableId: true,
-              name: true,
-              githubUrl: true,
-              scholarUrl: true,
-              linkedinUrl: true,
-              xUrl: true,
-              homepageUrl: true,
-              email: true,
-              sourceUrlsJson: true,
+        projectLinks: {
+          include: {
+            project: true,
+          },
+        },
+        paperLinks: {
+          include: {
+            paper: true,
+          },
+        },
+        personLinks: {
+          orderBy: {
+            position: "asc",
+          },
+          include: {
+            person: {
+              select: {
+                stableId: true,
+                name: true,
+                githubUrl: true,
+                scholarUrl: true,
+                linkedinUrl: true,
+                xUrl: true,
+                homepageUrl: true,
+                email: true,
+                sourceUrlsJson: true,
+              },
             },
           },
         },
       },
-    },
-    orderBy: [{ sourceType: "asc" }, { displayRank: "asc" }],
-  });
+      orderBy: [{ sourceType: "asc" }, { displayRank: "asc" }],
+    }),
+    previousDataset
+      ? prisma.event.findMany({
+          where: {
+            datasetVersionId: previousDataset.id,
+          },
+          select: {
+            stableId: true,
+          },
+        })
+      : Promise.resolve([]),
+  ]);
 
-  const mappedEvents = events.map((event) => mapEventSummary(event, savedPeople));
+  const previousEventStableIds = previousEvents.length > 0
+    ? new Set(previousEvents.map((event) => event.stableId))
+    : null;
+  const mappedEvents = events.map((event) => mapEventSummary(event, savedPeople, previousEventStableIds));
 
   const githubEvents = mappedEvents
     .filter((event) => event.sourceType === "github")
@@ -716,20 +811,42 @@ export async function getKickstarterPageData() {
 }
 
 export async function getPipelineData() {
-  await ensureActiveDataset(prisma);
+  const activeDataset = await ensureActiveDataset(prisma);
 
   const entries = await prisma.pipelineEntry.findMany({
     orderBy: { savedAt: "desc" },
   });
 
   const stableIds = entries.map((entry) => entry.personStableId);
-  const people = await prisma.person.findMany({
-    where: {
-      stableId: { in: stableIds },
-      datasetVersion: { status: "ACTIVE" },
-    },
-  });
+  const eventStableIds = entries.map((entry) => entry.savedFromEventStableId);
+  const [people, events] = await Promise.all([
+    prisma.person.findMany({
+      where: {
+        stableId: { in: stableIds },
+        datasetVersionId: activeDataset.id,
+      },
+    }),
+    prisma.event.findMany({
+      where: {
+        datasetVersionId: activeDataset.id,
+        stableId: { in: eventStableIds },
+      },
+      include: {
+        projectLinks: {
+          include: {
+            project: true,
+          },
+        },
+        paperLinks: {
+          include: {
+            paper: true,
+          },
+        },
+      },
+    }),
+  ]);
   const peopleMap = new Map(people.map((person) => [person.stableId, mapPerson(person)]));
+  const eventsMap = new Map(events.map((event) => [event.stableId, event]));
 
   const mappedEntries: PipelineEntryView[] = entries
     .map((entry) => {
@@ -752,6 +869,7 @@ export async function getPipelineData() {
         status: entry.status,
         lastContactedAt: entry.lastContactedAt,
         notes: entry.notes,
+        featuredItem: buildPipelineFeaturedItem(eventsMap.get(entry.savedFromEventStableId), entry.savedFromEventTitle),
         person,
         timeAgo: timeAgo(entry.savedAt),
       };

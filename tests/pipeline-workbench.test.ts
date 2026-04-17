@@ -1,0 +1,93 @@
+// @vitest-environment jsdom
+
+import "@testing-library/jest-dom/vitest";
+import React from "react";
+
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { PipelineWorkbench } from "@/components/pipeline-workbench";
+import type { PipelineEntryView } from "@/lib/types";
+
+vi.mock("next/link", () => ({
+  default: ({
+    href,
+    children,
+    ...props
+  }: React.AnchorHTMLAttributes<HTMLAnchorElement> & {
+    href: string;
+    children: React.ReactNode;
+  }) => React.createElement("a", { href, ...props }, children),
+}));
+
+function createEntry(overrides: Partial<PipelineEntryView> = {}): PipelineEntryView {
+  return {
+    personStableId: "github:alice-chen",
+    savedAt: new Date("2026-04-15T12:00:00.000Z"),
+    savedFromEventStableId: "event:github:vox-agent",
+    savedFromEventTitle: "vox-agent",
+    recentActivitySummaryZh: "最近活动：创建 repo VoxAgent，近 7 天 +312 stars",
+    copySummaryShortZh: "Alice",
+    copySummaryFullZh: "Alice full",
+    status: null,
+    lastContactedAt: null,
+    notes: null,
+    featuredItem: {
+      title: "example/vox-agent",
+      url: "https://github.com/example/vox-agent",
+      introZh: "用于浏览器工作流的 agent 执行循环。",
+    },
+    person: {
+      stableId: "github:alice-chen",
+      name: "Alice Chen",
+      identitySummaryZh: "专注 agent runtime 的开源构建者",
+      evidenceSummaryZh: "创建相关 repo 并持续维护",
+      sourceUrls: ["https://github.com/alice-chen"],
+      githubUrl: "https://github.com/alice-chen",
+      scholarUrl: null,
+      linkedinUrl: null,
+      xUrl: null,
+      homepageUrl: "https://alice.example.com",
+      email: "alice@example.com",
+      organizationNamesRaw: ["OpenAI"],
+      schoolNamesRaw: [],
+      labNamesRaw: [],
+      bioSnippetsRaw: [],
+      founderHistoryRaw: [],
+      links: [
+        { label: "GitHub", url: "https://github.com/alice-chen" },
+        { label: "Email", url: "mailto:alice@example.com" },
+      ],
+    },
+    timeAgo: "1 天前",
+    ...overrides,
+  };
+}
+
+describe("PipelineWorkbench", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders the simplified card with project link and direct contact links", () => {
+    render(React.createElement(PipelineWorkbench, { entries: [createEntry()] }));
+
+    expect(screen.getByText("Alice Chen")).toBeInTheDocument();
+    expect(screen.getByText("OpenAI")).toBeInTheDocument();
+    expect(screen.getByText("用于浏览器工作流的 agent 执行循环。")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "查看项目/作品" })).toHaveAttribute("href", "https://github.com/example/vox-agent");
+    expect(screen.getByRole("link", { name: "GitHub" })).toHaveAttribute("href", "https://github.com/alice-chen");
+    expect(screen.getByRole("link", { name: "Email" })).toHaveAttribute("href", "mailto:alice@example.com");
+    expect(screen.queryByRole("button", { name: "详情" })).not.toBeInTheDocument();
+    expect(screen.queryByText("联系")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "复制" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Selected Person")).not.toBeInTheDocument();
+  });
+
+  it("keeps the empty state when there are no saved people", () => {
+    render(React.createElement(PipelineWorkbench, { entries: [] }));
+
+    expect(screen.getByText("当前 Pipeline 为空。")).toBeInTheDocument();
+    expect(screen.queryByText("尚未保存任何人物。")).not.toBeInTheDocument();
+  });
+});

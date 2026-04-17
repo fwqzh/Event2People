@@ -63,6 +63,7 @@ function createSummaryEvent(overrides: Partial<EventSummaryView> = {}): EventSum
     previewPeople: [{ stableId: "github:alice", name: "Alice", primaryLinkUrl: "https://github.com/alice" }],
     peopleCount: 1,
     isSaved: false,
+    isNew: false,
     cardSummary: "这是卡片上已经展示过的摘要。",
     ...overrides,
   };
@@ -799,6 +800,52 @@ describe("EventBoard", () => {
     expect(screen.getByText("Orbital Coder")).toBeInTheDocument();
     expect(screen.getByText("2026-03-18")).toBeInTheDocument();
     expect(screen.getByText("Started")).toBeInTheDocument();
+  });
+
+  it("marks only newly appeared cards with a NEW badge", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve({
+          ok: true,
+          json: async () => ({ ok: true, savedPersonStableIds: [] }),
+        }),
+      ),
+    );
+
+    render(
+      React.createElement(EventBoard, {
+        datasetVersionId: "dataset-kickstarter",
+        savedPersonStableIds: [],
+        githubEvents: [],
+        kickstarterEvents: [
+          createKickstarterSummaryEvent({
+            stableId: "event:kickstarter:new-orbital-coder",
+            cardTitle: "Orbital Coder",
+            eventTitleZh: "Orbital Coder",
+            isNew: true,
+          }),
+          createKickstarterSummaryEvent({
+            stableId: "event:kickstarter:steady-console",
+            cardTitle: "Steady Console",
+            eventTitleZh: "Steady Console",
+            isNew: false,
+            displayRank: 2,
+          }),
+        ],
+        arxivEvents: [],
+        visibleSources: ["kickstarter"],
+      }),
+    );
+
+    const newCard = screen.getByText("Orbital Coder").closest(".event-card");
+    const oldCard = screen.getByText("Steady Console").closest(".event-card");
+
+    expect(newCard).not.toBeNull();
+    expect(oldCard).not.toBeNull();
+    expect(within(newCard as HTMLElement).getByText("NEW")).toBeInTheDocument();
+    expect(within(oldCard as HTMLElement).queryByText("NEW")).not.toBeInTheDocument();
+    expect(screen.getAllByText("NEW")).toHaveLength(1);
   });
 
   it("shows pdf-extracted affiliations and contact emails on arxiv author cards", async () => {
