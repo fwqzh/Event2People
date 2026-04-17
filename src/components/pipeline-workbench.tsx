@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { buildPipelinePageCopy } from "@/lib/copy";
+import { buildPipelineEntryCopy } from "@/lib/copy";
 import type { PersonView, PipelineEntryView } from "@/lib/types";
 
 type PipelineWorkbenchProps = {
@@ -14,6 +14,8 @@ export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
   const [localEntries, setLocalEntries] = useState(entries);
   const [status, setStatus] = useState("");
   const [expandedOriginalCards, setExpandedOriginalCards] = useState<Record<string, boolean>>({});
+  const [copySuccessById, setCopySuccessById] = useState<Record<string, boolean>>({});
+  const copyResetTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const contactableCount = localEntries.filter((entry) => entry.person.links.length > 0).length;
 
   function getPrimaryAffiliation(person: PersonView) {
@@ -24,9 +26,37 @@ export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
     return Boolean(entry.person.identitySummaryZh && entry.person.identitySummaryZh !== primaryAffiliation);
   }
 
-  async function copyText(text: string, successMessage: string) {
-    await navigator.clipboard.writeText(text);
-    setStatus(successMessage);
+  useEffect(() => {
+    const copyResetTimers = copyResetTimersRef.current;
+
+    return () => {
+      copyResetTimers.forEach((timer) => clearTimeout(timer));
+      copyResetTimers.clear();
+    };
+  }, []);
+
+  function clearCopySuccessTimer(personStableId: string) {
+    const existingTimer = copyResetTimersRef.current.get(personStableId);
+
+    if (!existingTimer) {
+      return;
+    }
+
+    clearTimeout(existingTimer);
+    copyResetTimersRef.current.delete(personStableId);
+  }
+
+  async function copyEntry(entry: PipelineEntryView) {
+    await navigator.clipboard.writeText(buildPipelineEntryCopy(entry));
+    clearCopySuccessTimer(entry.personStableId);
+    setCopySuccessById((current) => ({ ...current, [entry.personStableId]: true }));
+
+    const nextTimer = setTimeout(() => {
+      setCopySuccessById((current) => ({ ...current, [entry.personStableId]: false }));
+      copyResetTimersRef.current.delete(entry.personStableId);
+    }, 1000);
+
+    copyResetTimersRef.current.set(entry.personStableId, nextTimer);
   }
 
   async function removeFromPipeline(personStableId: string) {
@@ -43,8 +73,14 @@ export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
       throw new Error(payload.error ?? "移除失败");
     }
 
+    clearCopySuccessTimer(personStableId);
     setLocalEntries((current) => {
       return current.filter((entry) => entry.personStableId !== personStableId);
+    });
+    setCopySuccessById((current) => {
+      const next = { ...current };
+      delete next[personStableId];
+      return next;
     });
   }
 
@@ -74,16 +110,6 @@ export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
               <em>Has links</em>
             </span>
           </div>
-
-          <div className="toolbar-card__actions">
-            <button
-              type="button"
-              className="primary-button"
-              onClick={() => void copyText(buildPipelinePageCopy(localEntries), "已复制本页摘要")}
-            >
-              复制本页摘要
-            </button>
-          </div>
         </div>
       </div>
 
@@ -93,24 +119,47 @@ export function PipelineWorkbench({ entries }: PipelineWorkbenchProps) {
             const primaryAffiliation = getPrimaryAffiliation(entry.person);
             const showIdentitySummary = shouldShowIdentitySummary(entry, primaryAffiliation);
             const isOriginalCardExpanded = expandedOriginalCards[entry.personStableId] ?? false;
+            const isCopySuccess = copySuccessById[entry.personStableId] ?? false;
 
             return (
               <article key={entry.personStableId} className="pipeline-card pipeline-card--simple">
-                <button
-                  type="button"
-                  className="pipeline-remove-button"
-                  aria-label={`将 ${entry.person.name} 移除出 Pipeline`}
-                  onClick={() => {
-                    void removeFromPipeline(entry.personStableId).catch((error) => {
-                      setStatus(error instanceof Error ? error.message : "移除失败");
-                    });
-                  }}
-                >
-                  <span className="pipeline-remove-button__icon" aria-hidden="true">
-                    ×
-                  </span>
-                  <span className="pipeline-remove-button__label">移除出Pipeline</span>
-                </button>
+                <div className="pipeline-card__utility">
+                  <button
+                    type="button"
+                    className={`pipeline-copy-button ${isCopySuccess ? "is-success" : ""}`}
+                    aria-label={isCopySuccess ? `${entry.person.name} 复制成功` : `复制 ${entry.person.name} 的信息`}
+                    onClick={() => {
+                      void copyEntry(entry).catch((error) => {
+                        setStatus(error instanceof Error ? error.message : "复制失败");
+                      });
+                    }}
+                  >
+                    <span className="pipeline-copy-button__icon" aria-hidden="true">
+                      <span className="pipeline-copy-button__sheet pipeline-copy-button__sheet--back" />
+                      <span className="pipeline-copy-button__sheet pipeline-copy-button__sheet--front" />
+                    </span>
+                    <span className="pipeline-copy-button__tooltip" aria-hidden="true">
+                      {isCopySuccess ? "复制成功" : "复制"}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="pipeline-remove-button"
+                    aria-label={`将 ${entry.person.name} 移除出 Pipeline`}
+                    onClick={() => {
+                      void removeFromPipeline(entry.personStableId).catch((error) => {
+                        setStatus(error instanceof Error ? error.message : "移除失败");
+                      });
+                    }}
+                  >
+                    <span className="pipeline-remove-button__icon" aria-hidden="true">
+                      ×
+                    </span>
+                    <span className="pipeline-remove-button__tooltip" aria-hidden="true">
+                      移除
+                    </span>
+                  </button>
+                </div>
                 <div className="pipeline-card__content">
                   <header className="pipeline-card__header">
                     <div className="pipeline-card__headline">

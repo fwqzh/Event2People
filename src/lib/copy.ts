@@ -44,3 +44,20 @@ export function buildPipelinePageCopy(entries: PipelineEntryView[]) {
 
   return ["本周 Pipeline", "", ...sections].join("\n");
 }
+
+export function buildPipelineEntryCopy(entry: PipelineEntryView) {
+  const projectTitle = entry.featuredItem?.title ?? entry.savedFromEventTitle;
+  const projectUrl = entry.featuredItem?.url ?? entry.originalEvent?.sourceLinks[0]?.url ?? "";
+  const contactLines =
+    entry.person.links.length > 0
+      ? entry.person.links.map((link) => `${link.label}: ${link.url}`)
+      : ["暂无可用联系渠道"];
+
+  return [
+    `姓名：${entry.person.name}`,
+    `项目名：${projectTitle}`,
+    `项目链接：${projectUrl || "暂无"}`,
+    "联系方式：",
+    ...contactLines,
+  ].join("\n");
+}

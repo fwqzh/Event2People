@@ -21,6 +21,8 @@ vi.mock("next/link", () => ({
   }) => React.createElement("a", { href, ...props }, children),
 }));
 
+const writeTextMock = vi.fn();
+
 function createEntry(overrides: Partial<PipelineEntryView> = {}): PipelineEntryView {
   return {
     personStableId: "github:alice-chen",
@@ -77,11 +79,21 @@ function createEntry(overrides: Partial<PipelineEntryView> = {}): PipelineEntryV
 
 describe("PipelineWorkbench", () => {
   afterEach(() => {
+    writeTextMock.mockReset();
+  });
+
+  afterEach(() => {
     cleanup();
   });
 
   it("renders the simplified card with project link and direct contact links", async () => {
     const user = userEvent.setup();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: writeTextMock,
+      },
+    });
 
     render(React.createElement(PipelineWorkbench, { entries: [createEntry()] }));
 
@@ -91,6 +103,25 @@ describe("PipelineWorkbench", () => {
     expect(screen.getByText("用于浏览器工作流的 agent 执行循环。")).toBeInTheDocument();
     expect(screen.getByText("项目原始链接")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "查看项目/作品" })).toHaveAttribute("href", "https://github.com/example/vox-agent");
+    const copyButton = screen.getByRole("button", { name: "复制 Alice Chen 的信息" });
+
+    expect(copyButton).toHaveTextContent("复制");
+    await user.click(copyButton);
+    expect(writeTextMock).toHaveBeenCalledWith(
+      [
+        "姓名：Alice Chen",
+        "项目名：example/vox-agent",
+        "项目链接：https://github.com/example/vox-agent",
+        "联系方式：",
+        "GitHub: https://github.com/alice-chen",
+        "Email: mailto:alice@example.com",
+      ].join("\n"),
+    );
+    expect(copyButton).toHaveTextContent("复制成功");
+    expect(copyButton).toHaveClass("is-success");
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    expect(copyButton).toHaveTextContent("复制");
+    expect(copyButton).not.toHaveClass("is-success");
     expect(screen.getByRole("button", { name: "展开原始卡片" })).toBeInTheDocument();
     expect(screen.getByText("GitHub")).toBeInTheDocument();
     expect(screen.getByText("Email")).toBeInTheDocument();
@@ -101,7 +132,6 @@ describe("PipelineWorkbench", () => {
     expect(screen.getByRole("link", { name: "在来源页打开" })).toHaveAttribute("href", "/github?event=event%3Agithub%3Avox-agent");
     expect(screen.queryByRole("button", { name: "详情" })).not.toBeInTheDocument();
     expect(screen.queryByText("联系")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "复制" })).not.toBeInTheDocument();
     expect(screen.queryByText("Selected Person")).not.toBeInTheDocument();
   }, 10000);
 
