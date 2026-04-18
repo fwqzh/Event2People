@@ -106,9 +106,6 @@ export function TavilySettingsPanel({ initialSnapshot }: TavilySettingsPanelProp
           <p>当前项目会优先读取这里保存的本机配置，文件位于 `.local/settings.json`，不会回写 `.env`。</p>
         </div>
         <div className="settings-card__links">
-          <a href="https://www.tavily.com/" target="_blank" rel="noreferrer" className="ghost-button">
-            Tavily 官网
-          </a>
           <a href="https://app.tavily.com/" target="_blank" rel="noreferrer" className="ghost-button">
             Tavily 控制台
           </a>
