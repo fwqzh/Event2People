@@ -823,6 +823,96 @@ describe("EventBoard", () => {
     expect(previewImage).toHaveAttribute("src", "https://images.example.com/orbital-coder.jpg");
   });
 
+  it("filters kickstarter campaigns by started date, syncs the URL, and hides entries without started metadata", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(new Date("2026-03-26T12:00:00.000Z").getTime());
+    const user = userEvent.setup();
+    mockPathname = "/kickstarter";
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+
+        if (url.includes("/api/pipeline")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ ok: true, savedPersonStableIds: [] }),
+          });
+        }
+
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    render(
+      React.createElement(EventBoard, {
+        datasetVersionId: "dataset-kickstarter",
+        savedPersonStableIds: [],
+        githubEvents: [],
+        kickstarterEvents: [
+          createKickstarterSummaryEvent({
+            stableId: "event:kickstarter:recent",
+            cardTitle: "Recent Launch",
+            eventTitleZh: "Recent Launch",
+            metrics: [
+              { label: "Pledged", value: "$40,000" },
+              { label: "Started", value: "2026-03-20" },
+              { label: "Goal", value: "$20,000" },
+              { label: "Backers", value: "500" },
+              { label: "Days Left", value: "10 days" },
+            ],
+          }),
+          createKickstarterSummaryEvent({
+            stableId: "event:kickstarter:older",
+            cardTitle: "Older Launch",
+            eventTitleZh: "Older Launch",
+            displayRank: 2,
+            metrics: [
+              { label: "Pledged", value: "$400,000" },
+              { label: "Started", value: "2025-12-20" },
+              { label: "Goal", value: "$20,000" },
+              { label: "Backers", value: "2,500" },
+              { label: "Days Left", value: "10 days" },
+            ],
+          }),
+          createKickstarterSummaryEvent({
+            stableId: "event:kickstarter:no-started",
+            cardTitle: "No Started Metric",
+            eventTitleZh: "No Started Metric",
+            displayRank: 3,
+            metrics: [
+              { label: "Pledged", value: "$90,000" },
+              { label: "Goal", value: "$30,000" },
+              { label: "Backers", value: "900" },
+              { label: "Status", value: "Live" },
+            ],
+          }),
+        ],
+        arxivEvents: [],
+        visibleSources: ["kickstarter"],
+      }),
+    );
+
+    expect(screen.getByRole("group", { name: "Kickstarter 开始时间筛选" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "全部" })).toBeChecked();
+    expect(screen.getByText("3 / 3 个匹配")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("checkbox", { name: "30天" }));
+
+    expect(screen.getByText("1 / 3 个匹配")).toBeInTheDocument();
+    expect(screen.getByText("Recent Launch")).toBeInTheDocument();
+    expect(screen.queryByText("Older Launch")).not.toBeInTheDocument();
+    expect(screen.queryByText("No Started Metric")).not.toBeInTheDocument();
+    expect(screen.getByText("当前仅找到 1 个符合开始时间条件的 campaign。可尝试放宽时间窗，或清空筛选。")).toBeInTheDocument();
+    expect(String(routerReplaceMock.mock.lastCall?.[0])).toContain("kickstarterTime=30d");
+
+    await user.click(screen.getByRole("button", { name: "清空筛选" }));
+
+    expect(screen.getByText("3 / 3 个匹配")).toBeInTheDocument();
+    expect(screen.getByText("Older Launch")).toBeInTheDocument();
+    expect(screen.getByText("No Started Metric")).toBeInTheDocument();
+  });
+
   it("marks only newly appeared cards with a NEW badge", async () => {
     vi.stubGlobal(
       "fetch",
@@ -957,8 +1047,7 @@ describe("EventBoard", () => {
     expect(within(authorCard as HTMLElement).getAllByText("Tsinghua University")).toHaveLength(1);
   });
 
-  it("shows arxiv filters and keeps the default list at the first 20 matching papers", async () => {
-    const user = userEvent.setup();
+  it("shows arxiv filters, keeps the default list at the first 20 matching papers, and hides the load-more button", () => {
     mockPathname = "/arxiv";
 
     vi.stubGlobal(
@@ -1004,11 +1093,7 @@ describe("EventBoard", () => {
     expect(screen.getByText("Filtered Paper 1")).toBeInTheDocument();
     expect(screen.getByText("Filtered Paper 20")).toBeInTheDocument();
     expect(screen.queryByText("Filtered Paper 21")).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "查看更多结果" }));
-
-    expect(screen.getByText("Filtered Paper 21")).toBeInTheDocument();
-    expect(screen.getByText("Filtered Paper 22")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "查看更多结果" })).not.toBeInTheDocument();
   }, 15_000);
 
   it("expands a deep-linked source card from the event query param", async () => {
@@ -1224,5 +1309,85 @@ describe("EventBoard", () => {
 
     expect(screen.queryByRole("group", { name: "论文时间筛选" })).not.toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "论文类目筛选" })).not.toBeInTheDocument();
+  });
+
+  it("hydrates kickstarter started-time filters from the URL and keeps them hidden elsewhere", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(new Date("2026-03-28T12:00:00.000Z").getTime());
+    mockPathname = "/kickstarter";
+    mockSearchParams = new URLSearchParams("kickstarterTime=14d");
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+
+        if (url.includes("/api/pipeline")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ ok: true, savedPersonStableIds: [] }),
+          });
+        }
+
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    const { rerender } = render(
+      React.createElement(EventBoard, {
+        datasetVersionId: "dataset-kickstarter",
+        savedPersonStableIds: [],
+        githubEvents: [],
+        kickstarterEvents: [
+          createKickstarterSummaryEvent({
+            stableId: "event:kickstarter:recent",
+            cardTitle: "Recent Launch",
+            eventTitleZh: "Recent Launch",
+            metrics: [
+              { label: "Pledged", value: "$40,000" },
+              { label: "Started", value: "2026-03-20" },
+              { label: "Goal", value: "$20,000" },
+              { label: "Backers", value: "500" },
+              { label: "Days Left", value: "10 days" },
+            ],
+          }),
+          createKickstarterSummaryEvent({
+            stableId: "event:kickstarter:older",
+            cardTitle: "Older Launch",
+            eventTitleZh: "Older Launch",
+            displayRank: 2,
+            metrics: [
+              { label: "Pledged", value: "$400,000" },
+              { label: "Started", value: "2025-12-20" },
+              { label: "Goal", value: "$20,000" },
+              { label: "Backers", value: "2,500" },
+              { label: "Days Left", value: "10 days" },
+            ],
+          }),
+        ],
+        arxivEvents: [],
+        visibleSources: ["kickstarter"],
+      }),
+    );
+
+    expect(screen.getByRole("checkbox", { name: "14天" })).toBeChecked();
+    expect(screen.getByText("1 / 2 个匹配")).toBeInTheDocument();
+    expect(screen.getByText("Recent Launch")).toBeInTheDocument();
+    expect(screen.queryByText("Older Launch")).not.toBeInTheDocument();
+    expect(routerReplaceMock).not.toHaveBeenCalled();
+
+    mockPathname = "/github";
+    mockSearchParams = new URLSearchParams("kickstarterTime=14d");
+
+    rerender(
+      React.createElement(EventBoard, {
+        datasetVersionId: "dataset-github",
+        savedPersonStableIds: [],
+        githubEvents: [createSummaryEvent()],
+        arxivEvents: [createArxivSummaryEvent()],
+        visibleSources: ["github"],
+      }),
+    );
+
+    expect(screen.queryByRole("group", { name: "Kickstarter 开始时间筛选" })).not.toBeInTheDocument();
   });
 });

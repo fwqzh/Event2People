@@ -36,6 +36,14 @@ const QUERY_BUCKETS: ReadonlyArray<{ query: string; timeRange: "week" | "month" 
 ];
 const ALLOWED_PROJECT_SUBPAGES = new Set(["comments", "community", "description", "faq", "faqs", "rewards"]);
 const CURRENCY_TOKEN = String.raw`(?:(?:US|CA|AU|NZ|HK|SG)?\$|€|£)\s?[\d,.]+(?:\s?[KMBkmb])?`;
+const KICKSTARTER_BODY_MARKERS = [
+  /\bis raising funds for\b/i,
+  /\bfunding period\b/i,
+  /\b(?:pledged|goal|backers?)\b/i,
+  /\b\d+\s+(?:days?|hours?)\s+(?:left|to go|remaining)\b/i,
+] as const;
+const KICKSTARTER_NOISE_LINK_PATTERN =
+  /kickstarter\.com\/(?:creators|discover|start|login|signup|about|rules|help|terms|privacy|articles|projects\/[^/]+\/[^/]+\/posts(?:\/\d+)?)/i;
 const AI_KEYWORDS = [
   "ai",
   "artificial intelligence",
@@ -132,6 +140,12 @@ type TavilySearchResult = {
   url: string;
   content: string;
   score: number;
+};
+
+type KickstarterCampaignSupplement = {
+  startedAt: Date | null;
+  startedLabel: string | null;
+  imageUrl: string | null;
 };
 
 export type KickstarterCampaign = {
@@ -516,6 +530,38 @@ function extractCreatorName(title: string, text: string) {
   return compactText(textMatch?.[1]);
 }
 
+function stripKickstarterMarkdownNoise(text: string) {
+  return compactText(text)
+    .replace(/!\[[^\]]*]\([^)]+\)/gi, " ")
+    .replace(/\[([^\]]*)]\(([^)]+)\)/gi, (_, label: string, url: string) => {
+      return KICKSTARTER_NOISE_LINK_PATTERN.test(url) ? " " : ` ${label} `;
+    })
+    .replace(/https?:\/\/[^\s)"']+/gi, " ")
+    .replace(/[#*_`>]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractKickstarterNarrative(text: string) {
+  const cleaned = stripKickstarterMarkdownNoise(text);
+
+  if (!cleaned) {
+    return "";
+  }
+
+  for (const pattern of KICKSTARTER_BODY_MARKERS) {
+    const matched = cleaned.match(pattern);
+
+    if (!matched || typeof matched.index !== "number") {
+      continue;
+    }
+
+    return compactText(cleaned.slice(Math.max(0, matched.index - 120), matched.index + 1_080));
+  }
+
+  return compactText(cleaned.slice(0, 960));
+}
+
 function buildSummary(text: string, campaignName: string) {
   const normalized = compactText(text)
     .replace(/\s+/g, " ")
@@ -616,6 +662,76 @@ async function enrichKickstarterCampaignImage(campaign: KickstarterCampaign) {
   };
 }
 
+async function fetchKickstarterCampaignSupplement(campaignUrl: string): Promise<KickstarterCampaignSupplement | null> {
+  const results = await searchWithTavily(`"${campaignUrl}"`, { maxResults: 8 });
+
+  if (results.length === 0) {
+    return null;
+  }
+
+  const canonicalMatches = results.filter((result) => normalizeKickstarterCampaignUrl(result.url) === campaignUrl);
+  const candidates = canonicalMatches.length > 0 ? canonicalMatches : results;
+  let startedAt: Date | null = null;
+  let startedLabel: string | null = null;
+  let imageUrl: string | null = null;
+
+  for (const candidate of candidates) {
+    const content = compactText(candidate.content || candidate.title);
+
+    if (!content) {
+      continue;
+    }
+
+    if (!startedAt) {
+      const nextStartDate = extractStartDate(content);
+
+      if (nextStartDate.startedAt) {
+        startedAt = nextStartDate.startedAt;
+        startedLabel = nextStartDate.startedLabel;
+      }
+    }
+
+    if (!imageUrl) {
+      imageUrl = extractPreviewImageUrlFromContent(content, campaignUrl);
+    }
+
+    if (startedAt && imageUrl) {
+      break;
+    }
+  }
+
+  return startedAt || imageUrl
+    ? {
+        startedAt,
+        startedLabel,
+        imageUrl,
+      }
+    : null;
+}
+
+async function enrichKickstarterCampaign(campaign: KickstarterCampaign) {
+  let nextCampaign = campaign;
+
+  if (!campaign.startedAt || !campaign.imageUrl) {
+    const supplement = await fetchKickstarterCampaignSupplement(campaign.campaignUrl);
+
+    if (supplement) {
+      nextCampaign = {
+        ...nextCampaign,
+        startedAt: nextCampaign.startedAt ?? supplement.startedAt,
+        startedLabel: nextCampaign.startedLabel ?? supplement.startedLabel,
+        imageUrl: nextCampaign.imageUrl ?? supplement.imageUrl,
+      };
+    }
+  }
+
+  if (!nextCampaign.imageUrl) {
+    nextCampaign = await enrichKickstarterCampaignImage(nextCampaign);
+  }
+
+  return nextCampaign;
+}
+
 export function parseKickstarterCampaignCandidate(
   result: TavilySearchResult,
   now = new Date(),
@@ -626,9 +742,11 @@ export function parseKickstarterCampaignCandidate(
     return null;
   }
 
-  const haystack = `${result.title} ${result.content} ${campaignUrl}`;
+  const metricsText = compactText(result.content || result.title);
+  const narrativeText = extractKickstarterNarrative(result.content || result.title);
+  const classificationHaystack = compactText(`${result.title} ${narrativeText} ${campaignUrl}`);
 
-  if (!isTargetKickstarterProject(haystack)) {
+  if (!isTargetKickstarterProject(classificationHaystack)) {
     return null;
   }
 
@@ -638,17 +756,17 @@ export function parseKickstarterCampaignCandidate(
     return null;
   }
 
-  const creatorName = extractCreatorName(result.title, haystack);
-  const pledged = extractPledgedMetric(haystack);
-  const goal = extractGoalMetric(haystack);
-  const backers = extractBackersMetric(haystack);
-  const daysLeftLabel = extractDaysLeftLabel(haystack);
-  const startDate = extractStartDate(haystack);
-  const statusLabel = getStatusLabel(haystack, daysLeftLabel);
+  const creatorName = extractCreatorName(result.title, narrativeText || metricsText);
+  const pledged = extractPledgedMetric(metricsText);
+  const goal = extractGoalMetric(metricsText);
+  const backers = extractBackersMetric(metricsText);
+  const daysLeftLabel = extractDaysLeftLabel(metricsText);
+  const startDate = extractStartDate(metricsText);
+  const statusLabel = getStatusLabel(metricsText, daysLeftLabel);
   const hasFundingSignal =
     pledged.amount !== null || goal.amount !== null || backers.count !== null || Boolean(daysLeftLabel) || Boolean(startDate.startedAt);
 
-  if (!hasFundingSignal && !isTargetKickstarterProject(haystack, { requireStrongSignal: true })) {
+  if (!hasFundingSignal && !isTargetKickstarterProject(classificationHaystack, { requireStrongSignal: true })) {
     return null;
   }
 
@@ -660,7 +778,7 @@ export function parseKickstarterCampaignCandidate(
     creatorUrl: null,
     startedAt: startDate.startedAt,
     startedLabel: startDate.startedLabel,
-    summaryRaw: buildSummary(result.content || result.title, campaignName),
+    summaryRaw: buildSummary(narrativeText || metricsText || result.title, campaignName),
     pledgedAmount: pledged.amount,
     pledgedLabel: pledged.label,
     goalAmount: goal.amount,
@@ -671,7 +789,7 @@ export function parseKickstarterCampaignCandidate(
     daysLeftLabel,
     isLive: statusLabel === "Live",
     collectedAt: now,
-    searchRelevance: Math.max(getSearchRelevance(haystack), Math.round(result.score * 100)),
+    searchRelevance: Math.max(getSearchRelevance(classificationHaystack), Math.round(result.score * 100)),
   };
 }
 
@@ -706,6 +824,18 @@ export function coalesceKickstarterCampaigns(candidates: KickstarterCampaign[], 
 
   return [...deduped.values()]
     .sort((left, right) => {
+      const startedDelta =
+        Number(right.startedAt?.getTime() ?? -1) -
+        Number(left.startedAt?.getTime() ?? -1);
+
+      if (startedDelta !== 0) {
+        return startedDelta;
+      }
+
+      if (left.isLive !== right.isLive) {
+        return left.isLive ? -1 : 1;
+      }
+
       const pledgedDelta = Number(right.pledgedAmount ?? -1) - Number(left.pledgedAmount ?? -1);
 
       if (pledgedDelta !== 0) {
@@ -716,10 +846,6 @@ export function coalesceKickstarterCampaigns(candidates: KickstarterCampaign[], 
 
       if (backersDelta !== 0) {
         return backersDelta;
-      }
-
-      if (left.isLive !== right.isLive) {
-        return left.isLive ? -1 : 1;
       }
 
       const recencyDelta = right.collectedAt.getTime() - left.collectedAt.getTime();
@@ -733,7 +859,7 @@ export function coalesceKickstarterCampaigns(candidates: KickstarterCampaign[], 
     .slice(0, limit);
 }
 
-async function searchWithTavily(query: string, timeRange: "week" | "month") {
+async function searchWithTavily(query: string, options?: { timeRange?: "week" | "month"; maxResults?: number }) {
   const tavilyApiKey = await getTavilyApiKey();
 
   if (!tavilyApiKey) {
@@ -752,9 +878,9 @@ async function searchWithTavily(query: string, timeRange: "week" | "month") {
         query,
         topic: "general",
         country: TAVILY_COUNTRY,
-        time_range: timeRange,
+        ...(options?.timeRange ? { time_range: options.timeRange } : {}),
         search_depth: "advanced",
-        max_results: 12,
+        max_results: options?.maxResults ?? 12,
         include_raw_content: true,
         include_answer: false,
       }),
@@ -790,12 +916,10 @@ export async function fetchKickstarterCampaigns(limit = 10) {
   const candidates: KickstarterCampaign[] = [];
 
   for (const bucket of QUERY_BUCKETS) {
-    const results = await searchWithTavily(bucket.query, bucket.timeRange);
-    const collectedAt =
-      bucket.timeRange === "week" ? now : new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const results = await searchWithTavily(bucket.query, { timeRange: bucket.timeRange });
 
     for (const result of results) {
-      const candidate = parseKickstarterCampaignCandidate(result, collectedAt);
+      const candidate = parseKickstarterCampaignCandidate(result, now);
 
       if (candidate) {
         candidates.push(candidate);
@@ -803,5 +927,5 @@ export async function fetchKickstarterCampaigns(limit = 10) {
     }
   }
 
-  return Promise.all(coalesceKickstarterCampaigns(candidates, limit).map((campaign) => enrichKickstarterCampaignImage(campaign)));
+  return Promise.all(coalesceKickstarterCampaigns(candidates, limit).map((campaign) => enrichKickstarterCampaign(campaign)));
 }

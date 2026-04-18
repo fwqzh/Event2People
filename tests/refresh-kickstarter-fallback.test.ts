@@ -133,6 +133,7 @@ describe("refresh kickstarter fallback", () => {
       "ANYPIN Note Pod P1",
       "Rokid Glasses",
     ]);
+    expect(result.events[0]?.timePrimary.toISOString()).toBe("2026-04-06T00:00:00.000Z");
     expect(result.events.map((event) => event.displayRank)).toEqual([1, 2, 3]);
     expect(result.people.map((person) => person.name)).toEqual(["AInoon", "ANYPIN", "Rokid Team"]);
     expect(result.warning).toContain("补齐到 3 个");

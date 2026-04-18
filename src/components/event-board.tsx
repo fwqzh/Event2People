@@ -33,8 +33,15 @@ const ARXIV_TIME_WINDOWS = [
   { value: "30d", label: "30天" },
   { value: "90d", label: "90天" },
 ] as const;
+const KICKSTARTER_TIME_WINDOWS = [
+  { value: "all", label: "全部" },
+  { value: "7d", label: "7天" },
+  { value: "14d", label: "14天" },
+  { value: "30d", label: "30天" },
+] as const;
 
 type ArxivTimeWindow = (typeof ARXIV_TIME_WINDOWS)[number]["value"];
+type KickstarterTimeWindow = (typeof KICKSTARTER_TIME_WINDOWS)[number]["value"];
 const ARXIV_CATEGORY_OPTIONS = [
   { value: "agent", label: "Agent" },
   { value: "world-model", label: "World Model" },
@@ -67,7 +74,7 @@ const SECTION_CONFIG: Record<
     title: "Kickstarter Signals",
     kicker: "Product / Demand",
     status: "Kickstarter Search",
-    description: "基于 Kickstarter campaign 搜索候选聚合，只保留原站项目页，并按 pledged amount 从高到低展示前 10 个众筹项目。",
+    description: "基于 Kickstarter campaign 搜索候选聚合，只保留原站项目页；当前页支持按开始筹款时间筛选，优先查看更近期开启的项目。",
     emptyState: "当前没有匹配 campaign。",
   },
   arxiv: {
@@ -88,6 +95,12 @@ function normalizeArxivTimeWindow(value: string | null | undefined): ArxivTimeWi
   return ARXIV_TIME_WINDOWS.some((windowOption) => windowOption.value === value) ? (value as ArxivTimeWindow) : "all";
 }
 
+function normalizeKickstarterTimeWindow(value: string | null | undefined): KickstarterTimeWindow {
+  return KICKSTARTER_TIME_WINDOWS.some((windowOption) => windowOption.value === value)
+    ? (value as KickstarterTimeWindow)
+    : "all";
+}
+
 function normalizeArxivCategories(value: string | null | undefined) {
   const requested = (value ?? "")
     .split(",")
@@ -104,6 +117,23 @@ function compactFilterValue(value: string | null | undefined) {
 
 function toEventTimestamp(event: EventSummaryView) {
   return new Date(event.timePrimary).getTime();
+}
+
+function getKickstarterStartedAt(event: EventSummaryView) {
+  const startedMetric = event.metrics.find((metric) => metric.label === "Started");
+
+  if (!startedMetric?.value) {
+    return null;
+  }
+
+  const normalized = compactFilterValue(startedMetric.value);
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    return null;
+  }
+
+  const parsed = new Date(`${normalized}T00:00:00.000Z`).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function buildArxivFilterHaystack(event: EventSummaryView) {
@@ -188,8 +218,9 @@ export function EventBoard({
   const warmedEventIdsRef = useRef<Set<string>>(new Set());
   const detailLoadTokenRef = useRef<Map<string, number>>(new Map());
   const analysisLoadTokenRef = useRef<Map<string, number>>(new Map());
-  const [arxivFilterNowTs] = useState(() => Date.now());
+  const [filterNowTs] = useState(() => Date.now());
   const searchParamsTime = searchParams.get("time");
+  const searchParamsKickstarterTime = searchParams.get("kickstarterTime");
   const searchParamsTopic = searchParams.get("topic");
   const searchParamsCategories = searchParams.get("categories");
   const searchParamsEvent = searchParams.get("event");
@@ -223,14 +254,39 @@ export function EventBoard({
       ? normalizeArxivCategories(searchParamsCategories)
       : mapLegacyTopicToCategories(searchParamsTopic),
   );
+  const [kickstarterTimeWindow, setKickstarterTimeWindow] = useState<KickstarterTimeWindow>(() =>
+    normalizeKickstarterTimeWindow(searchParamsKickstarterTime),
+  );
   const [status, setStatus] = useState("");
   const sectionsToRender = useMemo(
     () => (visibleSources?.length ? [...new Set(visibleSources)] : (["github", "kickstarter", "arxiv"] as EventSource[])),
     [visibleSources],
   );
+  const enableKickstarterFilters = sectionsToRender.length === 1 && sectionsToRender[0] === "kickstarter";
 
   const allEvents = useMemo(() => [...githubEvents, ...kickstarterEvents, ...arxivEvents], [arxivEvents, githubEvents, kickstarterEvents]);
   const selectedArxivCategories = useMemo(() => new Set(arxivCategories), [arxivCategories]);
+  const filteredKickstarterEvents = useMemo(() => {
+    if (!enableKickstarterFilters || kickstarterTimeWindow === "all") {
+      return kickstarterEvents;
+    }
+
+    const maxAgeDays = Number(kickstarterTimeWindow.replace("d", ""));
+
+    if (!Number.isFinite(maxAgeDays)) {
+      return kickstarterEvents;
+    }
+
+    return kickstarterEvents.filter((event) => {
+      const startedAtTs = getKickstarterStartedAt(event);
+
+      if (!startedAtTs) {
+        return false;
+      }
+
+      return startedAtTs >= filterNowTs - maxAgeDays * DAY_IN_MS;
+    });
+  }, [enableKickstarterFilters, filterNowTs, kickstarterEvents, kickstarterTimeWindow]);
   const filteredArxivEvents = useMemo(() => {
     if (!enableArxivFilters) {
       return arxivEvents;
@@ -242,7 +298,7 @@ export function EventBoard({
       if (arxivTimeWindow !== "all") {
         const maxAgeDays = Number(arxivTimeWindow.replace("d", ""));
 
-        if (!Number.isFinite(maxAgeDays) || publishedAtTs < arxivFilterNowTs - maxAgeDays * DAY_IN_MS) {
+        if (!Number.isFinite(maxAgeDays) || publishedAtTs < filterNowTs - maxAgeDays * DAY_IN_MS) {
           return false;
         }
       }
@@ -257,20 +313,32 @@ export function EventBoard({
 
       return true;
     });
-  }, [arxivEvents, arxivFilterNowTs, arxivTimeWindow, enableArxivFilters, selectedArxivCategories]);
+  }, [arxivEvents, arxivTimeWindow, enableArxivFilters, filterNowTs, selectedArxivCategories]);
   const hasActiveArxivFilters = enableArxivFilters && (arxivTimeWindow !== "all" || arxivCategories.length > 0);
+  const hasActiveKickstarterFilters = enableKickstarterFilters && kickstarterTimeWindow !== "all";
   const renderedSectionEvents = useMemo(
     () =>
       sectionsToRender.flatMap((source) =>
         source === "github"
           ? githubEvents
           : source === "kickstarter"
-            ? kickstarterEvents
+            ? enableKickstarterFilters
+              ? filteredKickstarterEvents
+              : kickstarterEvents
             : enableArxivFilters
               ? filteredArxivEvents
               : arxivEvents,
       ),
-    [arxivEvents, enableArxivFilters, filteredArxivEvents, githubEvents, kickstarterEvents, sectionsToRender],
+    [
+      arxivEvents,
+      enableArxivFilters,
+      enableKickstarterFilters,
+      filteredArxivEvents,
+      filteredKickstarterEvents,
+      githubEvents,
+      kickstarterEvents,
+      sectionsToRender,
+    ],
   );
   const savedPersonIds = useMemo(() => {
     const ids = new Set<string>(serverSavedPersonIds);
@@ -572,6 +640,15 @@ export function EventBoard({
   }, [enableArxivFilters, searchParamsCategories, searchParamsTime, searchParamsTopic]);
 
   useEffect(() => {
+    if (!enableKickstarterFilters) {
+      return;
+    }
+
+    const nextTimeWindow = normalizeKickstarterTimeWindow(searchParamsKickstarterTime);
+    setKickstarterTimeWindow((current) => (current === nextTimeWindow ? current : nextTimeWindow));
+  }, [enableKickstarterFilters, searchParamsKickstarterTime]);
+
+  useEffect(() => {
     if (!enableArxivFilters) {
       return;
     }
@@ -606,6 +683,31 @@ export function EventBoard({
   }, [arxivCategories, arxivTimeWindow, enableArxivFilters, pathname, router, searchParams]);
 
   useEffect(() => {
+    if (!enableKickstarterFilters) {
+      return;
+    }
+
+    const params = new URLSearchParams(searchParams.toString());
+
+    if (kickstarterTimeWindow === "all") {
+      params.delete("kickstarterTime");
+    } else {
+      params.set("kickstarterTime", kickstarterTimeWindow);
+    }
+
+    const nextQueryString = params.toString();
+    const currentQueryString = searchParams.toString();
+
+    if (nextQueryString === currentQueryString) {
+      return;
+    }
+
+    startTransition(() => {
+      router.replace(nextQueryString ? `${pathname}?${nextQueryString}` : pathname, { scroll: false });
+    });
+  }, [enableKickstarterFilters, kickstarterTimeWindow, pathname, router, searchParams]);
+
+  useEffect(() => {
     if (!enableArxivFilters) {
       return;
     }
@@ -614,6 +716,16 @@ export function EventBoard({
       current.arxiv === ARXIV_VISIBLE_LIMIT ? current : { ...current, arxiv: ARXIV_VISIBLE_LIMIT },
     );
   }, [arxivCategories, arxivTimeWindow, enableArxivFilters]);
+
+  useEffect(() => {
+    if (!enableKickstarterFilters) {
+      return;
+    }
+
+    setVisibleCounts((current) =>
+      current.kickstarter === DEFAULT_VISIBLE_COUNT ? current : { ...current, kickstarter: DEFAULT_VISIBLE_COUNT },
+    );
+  }, [enableKickstarterFilters, kickstarterTimeWindow]);
 
   useEffect(() => {
     const deepLinkedEventId = compactFilterValue(searchParamsEvent);
@@ -632,7 +744,9 @@ export function EventBoard({
       source === "github"
         ? githubEvents
         : source === "kickstarter"
-          ? kickstarterEvents
+          ? enableKickstarterFilters
+            ? filteredKickstarterEvents
+            : kickstarterEvents
           : enableArxivFilters
             ? filteredArxivEvents
             : arxivEvents;
@@ -648,7 +762,18 @@ export function EventBoard({
       return nextVisibleCount === current[source] ? current : { ...current, [source]: nextVisibleCount };
     });
     setCollapsedSections((current) => (current[source] ? { ...current, [source]: false } : current));
-  }, [arxivEvents, enableArxivFilters, eventSourceById, filteredArxivEvents, githubEvents, kickstarterEvents, searchParamsEvent, visibleCounts]);
+  }, [
+    arxivEvents,
+    enableArxivFilters,
+    enableKickstarterFilters,
+    eventSourceById,
+    filteredArxivEvents,
+    filteredKickstarterEvents,
+    githubEvents,
+    kickstarterEvents,
+    searchParamsEvent,
+    visibleCounts,
+  ]);
 
   useEffect(() => {
     if (isExpandedIdHydrated) {
@@ -1095,6 +1220,10 @@ export function EventBoard({
     setArxivCategories([]);
   }
 
+  function clearKickstarterFilters() {
+    setKickstarterTimeWindow("all");
+  }
+
   function toggleArxivTimeWindow(nextTimeWindow: ArxivTimeWindow, checked: boolean) {
     setArxivTimeWindow(checked ? nextTimeWindow : "all");
   }
@@ -1107,10 +1236,19 @@ export function EventBoard({
     );
   }
 
+  function toggleKickstarterTimeWindow(nextTimeWindow: KickstarterTimeWindow, checked: boolean) {
+    setKickstarterTimeWindow(checked ? nextTimeWindow : "all");
+  }
+
   function renderSection(source: EventSource, events: EventSummaryView[]) {
     const config = SECTION_CONFIG[source];
     const isCollapsed = collapsedSections[source];
-    const displayedEvents = source === "arxiv" && enableArxivFilters ? filteredArxivEvents : events;
+    const displayedEvents =
+      source === "kickstarter" && enableKickstarterFilters
+        ? filteredKickstarterEvents
+        : source === "arxiv" && enableArxivFilters
+          ? filteredArxivEvents
+          : events;
     const totalDisplayedCount = displayedEvents.length;
     const visibleCount = visibleCounts[source];
     const defaultVisibleCount = getDefaultVisibleCount(source);
@@ -1119,7 +1257,10 @@ export function EventBoard({
     const sectionPeopleCount = sectionPersonIds.size;
     const savedInSectionCount = [...sectionPersonIds].filter((personStableId) => savedPersonIds.has(personStableId)).length;
     const showArxivFilters = source === "arxiv" && enableArxivFilters;
+    const showKickstarterFilters = source === "kickstarter" && enableKickstarterFilters;
     const showArxivUnderflowNotice = showArxivFilters && hasActiveArxivFilters && totalDisplayedCount < ARXIV_VISIBLE_LIMIT;
+    const showKickstarterUnderflowNotice =
+      showKickstarterFilters && hasActiveKickstarterFilters && totalDisplayedCount < DEFAULT_VISIBLE_COUNT;
 
     return (
       <section className="board-section" key={source} id={`section-${source}`}>
@@ -1171,7 +1312,7 @@ export function EventBoard({
 
             <div className="board-section__actions">
               <SourceRefreshButton source={source} />
-              {!isCollapsed && totalDisplayedCount > defaultVisibleCount ? (
+              {!isCollapsed && !showArxivFilters && totalDisplayedCount > defaultVisibleCount ? (
                 <button type="button" className="ghost-button" onClick={() => toggleVisibleCount(source, totalDisplayedCount)}>
                   {visibleCount >= totalDisplayedCount ? "收起列表" : showArxivFilters ? "查看更多结果" : "查看更多"}
                 </button>
@@ -1234,6 +1375,45 @@ export function EventBoard({
             {showArxivUnderflowNotice ? (
               <p className="arxiv-filter-note">
                 当前仅找到 {totalDisplayedCount} 篇符合条件的论文。可尝试放宽时间窗，或清空类目筛选。
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
+        {showKickstarterFilters ? (
+          <div className="arxiv-filter-shell">
+            <div className="arxiv-filter-group" role="group" aria-label="Kickstarter 开始时间筛选">
+              <span className="arxiv-filter-group__label">开始筹款</span>
+              <div className="arxiv-filter-group__checks">
+                {KICKSTARTER_TIME_WINDOWS.map((windowOption) => (
+                  <label
+                    key={windowOption.value}
+                    className={`filter-checkbox ${kickstarterTimeWindow === windowOption.value ? "is-active" : ""}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={kickstarterTimeWindow === windowOption.value}
+                      onChange={(changeEvent) => toggleKickstarterTimeWindow(windowOption.value, changeEvent.target.checked)}
+                    />
+                    <span className="filter-checkbox__control" aria-hidden="true" />
+                    <span className="filter-checkbox__label">{windowOption.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="arxiv-filter-toolbar">
+              <p className="arxiv-filter-summary">
+                {totalDisplayedCount} / {events.length} 个匹配
+              </p>
+              <button type="button" className="ghost-button" onClick={clearKickstarterFilters}>
+                清空筛选
+              </button>
+            </div>
+
+            {showKickstarterUnderflowNotice ? (
+              <p className="arxiv-filter-note">
+                当前仅找到 {totalDisplayedCount} 个符合开始时间条件的 campaign。可尝试放宽时间窗，或清空筛选。
               </p>
             ) : null}
           </div>

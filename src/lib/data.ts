@@ -233,6 +233,39 @@ function extractKickstarterPledged(metrics: Array<{ label: string; value: string
   return match ? Number(match[0]) : -1;
 }
 
+function extractKickstarterStartedAtTs(metrics: Array<{ label: string; value: string }>) {
+  const metric = metrics.find((item) => item.label === "Started");
+
+  if (!metric?.value || !/^\d{4}-\d{2}-\d{2}$/.test(metric.value)) {
+    return -1;
+  }
+
+  const parsed = new Date(`${metric.value}T00:00:00.000Z`).getTime();
+  return Number.isFinite(parsed) ? parsed : -1;
+}
+
+function compareKickstarterEvents(left: EventSummaryView, right: EventSummaryView) {
+  const startedDelta = extractKickstarterStartedAtTs(right.metrics) - extractKickstarterStartedAtTs(left.metrics);
+
+  if (startedDelta !== 0) {
+    return startedDelta;
+  }
+
+  const recencyDelta = right.timePrimary.getTime() - left.timePrimary.getTime();
+
+  if (recencyDelta !== 0) {
+    return recencyDelta;
+  }
+
+  const pledgedDelta = extractKickstarterPledged(right.metrics) - extractKickstarterPledged(left.metrics);
+
+  if (pledgedDelta !== 0) {
+    return pledgedDelta;
+  }
+
+  return left.displayRank - right.displayRank;
+}
+
 function compactCopy(value: string | null | undefined) {
   return value?.replace(/\s+/g, " ").trim() ?? "";
 }
@@ -878,7 +911,7 @@ async function getBoardData(options?: { githubLimit?: number; kickstarterLimit?:
     }));
   const kickstarterEvents = mappedEvents
     .filter((event) => event.sourceType === "kickstarter")
-    .sort((left, right) => extractKickstarterPledged(right.metrics) - extractKickstarterPledged(left.metrics))
+    .sort(compareKickstarterEvents)
     .slice(0, options?.kickstarterLimit ?? HOMEPAGE_VISIBLE_LIMIT)
     .map((event, index) => ({
       ...event,

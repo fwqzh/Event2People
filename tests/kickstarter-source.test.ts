@@ -27,6 +27,9 @@ describe("kickstarter source helpers", () => {
       normalizeKickstarterCampaignUrl("https://www.kickstarter.com/projects/lenaortiz/orbital-coder/comments"),
     ).toBe("https://www.kickstarter.com/projects/lenaortiz/orbital-coder");
     expect(
+      normalizeKickstarterCampaignUrl("https://www.kickstarter.com/projects/lenaortiz/orbital-coder/creator"),
+    ).toBe("");
+    expect(
       normalizeKickstarterCampaignUrl("https://www.kickstarter.com/projects/lenaortiz/orbital-coder/posts/1234567"),
     ).toBe("");
     expect(normalizeKickstarterCampaignUrl("https://www.kickstarter.com/discover")).toBe("");
@@ -84,6 +87,31 @@ describe("kickstarter source helpers", () => {
     expect(candidate?.statusLabel).toBe("Unknown");
   });
 
+  it("ignores kickstarter navigation taxonomy noise when parsing ai hardware campaigns", () => {
+    const candidate = parseKickstarterCampaignCandidate({
+      title: "AInoon: AI Smart Glasses That Actually Help You — Instantly",
+      url: "https://www.kickstarter.com/projects/ainoon/ainoon-ai-smart-glasses-that-actually-help-you-instantly",
+      content:
+        "# AInoon: AI Smart Glasses That Actually Help You — Instantly by AInoon — Kickstarter " +
+        "[](https://www.kickstarter.com/?ref=nav) [For creators](https://www.kickstarter.com/creators?ref=nav) " +
+        "[Tabletop Games](https://www.kickstarter.com/discover/categories/games/tabletop%20games) " +
+        "[Comics](https://www.kickstarter.com/discover/categories/comics) " +
+        "[Film](https://www.kickstarter.com/discover/categories/film%20&%20video) " +
+        "[Video Games](https://www.kickstarter.com/discover/categories/games/video%20games) " +
+        "AInoon is raising funds for AInoon: AI Smart Glasses That Actually Help You — Instantly on Kickstarter! " +
+        "AI smart glasses with translation, a 12MP camera, real-time assistance, and open-ear audio. " +
+        "Funding period Apr 1 2026 - Apr 30 2026 (29 days). $95,000 pledged of $20,000 goal 800 backers 11 days left.",
+      score: 0.98,
+    });
+
+    expect(candidate).toBeTruthy();
+    expect(candidate?.campaignName).toBe("AInoon: AI Smart Glasses That Actually Help You — Instantly");
+    expect(candidate?.creatorName).toBe("AInoon");
+    expect(candidate?.pledgedAmount).toBe(95000);
+    expect(candidate?.daysLeftLabel).toBe("11 days");
+    expect(candidate?.isLive).toBe(true);
+  });
+
   it("filters out games and entertainment projects", () => {
     const candidate = parseKickstarterCampaignCandidate({
       title: "Realm of Reckoning by IV Studios - Kickstarter",
@@ -91,6 +119,24 @@ describe("kickstarter source helpers", () => {
       content:
         "IV Studios is raising funds for Realm of Reckoning on Kickstarter! A new fantasy board game with miniatures. $672,875 pledged of $50,000 goal 5,824 backers 11 days left.",
       score: 0.94,
+    });
+
+    expect(candidate).toBeNull();
+  });
+
+  it("still filters out real tabletop projects even when Tavily content includes kickstarter navigation", () => {
+    const candidate = parseKickstarterCampaignCandidate({
+      title: "Realm of Reckoning by IV Studios - Kickstarter",
+      url: "https://www.kickstarter.com/projects/ivstudios/realm-of-reckoning",
+      content:
+        "# Realm of Reckoning by IV Studios - Kickstarter " +
+        "[](https://www.kickstarter.com/?ref=nav) [For creators](https://www.kickstarter.com/creators?ref=nav) " +
+        "[Tabletop Games](https://www.kickstarter.com/discover/categories/games/tabletop%20games) " +
+        "[Film](https://www.kickstarter.com/discover/categories/film%20&%20video) " +
+        "IV Studios is raising funds for Realm of Reckoning on Kickstarter! " +
+        "A fantasy board game with miniatures, campaign books, and tabletop battles. " +
+        "$672,875 pledged of $50,000 goal 5,824 backers 11 days left.",
+      score: 0.95,
     });
 
     expect(candidate).toBeNull();
@@ -108,7 +154,7 @@ describe("kickstarter source helpers", () => {
     expect(candidate).toBeNull();
   });
 
-  it("deduplicates campaigns and sorts by pledged, then backers, live status, and recency", () => {
+  it("deduplicates campaigns and sorts by started date, then live status, pledged, backers, and recency", () => {
     const now = new Date("2026-04-06T12:00:00.000Z");
     const older = new Date("2026-04-05T12:00:00.000Z");
     const campaigns = [
@@ -219,9 +265,9 @@ describe("kickstarter source helpers", () => {
     expect(ranked).toHaveLength(4);
     expect(ranked.map((campaign) => campaign.campaignName)).toEqual([
       "Orbital Coder",
-      "Echo Clip",
       "Atlas Arm",
       "FramePilot",
+      "Echo Clip",
     ]);
   });
 });
