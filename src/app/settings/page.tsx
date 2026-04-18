@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { unstable_noStore as noStore } from "next/cache";
 
 import { LlmSettingsPanel } from "@/components/llm-settings-panel";
@@ -20,16 +19,7 @@ export default async function SettingsPage() {
         <div className="toolbar-card__copy">
           <span className="section-kicker">Config / API</span>
           <h2>Settings</h2>
-          <p>这里管理运行时配置。现在除了 Tavily，也可以统一保存主流大模型 Provider 的 API 信息。</p>
-        </div>
-
-        <div className="toolbar-card__actions">
-          <Link href="/github" className="ghost-button">
-            返回 GitHub
-          </Link>
-          <Link href="/arxiv" className="ghost-button">
-            返回 arXiv
-          </Link>
+          <p>如刷新后出现文案混乱或信息缺失问题，可先检查API额度剩余情况。</p>
         </div>
       </section>
 
