@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { startTransition, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 
 import { SourceRefreshButton } from "@/components/source-refresh-button";
+import { KICKSTARTER_MAX_VISIBLE_AGE_DAYS } from "@/lib/kickstarter-config";
 import type { EventAnalysisView, EventDetailView, EventSummaryView } from "@/lib/types";
 
 type EventSource = "github" | "kickstarter" | "arxiv";
@@ -33,6 +34,8 @@ const ARXIV_TIME_WINDOWS = [
   { value: "30d", label: "30天" },
   { value: "90d", label: "90天" },
 ] as const;
+
+type ArxivTimeWindow = (typeof ARXIV_TIME_WINDOWS)[number]["value"];
 const KICKSTARTER_TIME_WINDOWS = [
   { value: "all", label: "全部" },
   { value: "7d", label: "7天" },
@@ -40,7 +43,6 @@ const KICKSTARTER_TIME_WINDOWS = [
   { value: "30d", label: "30天" },
 ] as const;
 
-type ArxivTimeWindow = (typeof ARXIV_TIME_WINDOWS)[number]["value"];
 type KickstarterTimeWindow = (typeof KICKSTARTER_TIME_WINDOWS)[number]["value"];
 const ARXIV_CATEGORY_OPTIONS = [
   { value: "agent", label: "Agent" },
@@ -74,7 +76,8 @@ const SECTION_CONFIG: Record<
     title: "Kickstarter Signals",
     kicker: "Product / Demand",
     status: "Kickstarter Search",
-    description: "基于 Kickstarter campaign 搜索候选聚合，只保留原站项目页；当前页支持按开始筹款时间筛选，优先查看更近期开启的项目。",
+    description:
+      "直接抓取 Kickstarter 官方 Technology 分区的原站项目页；所有筛选都只会在最近 90 天项目池内生效，默认按筹款金额排序，若窗口内不足 10 个会自动补入 90 天内更早项目。",
     emptyState: "当前没有匹配 campaign。",
   },
   arxiv: {
@@ -119,21 +122,67 @@ function toEventTimestamp(event: EventSummaryView) {
   return new Date(event.timePrimary).getTime();
 }
 
-function getKickstarterStartedAt(event: EventSummaryView) {
-  const startedMetric = event.metrics.find((metric) => metric.label === "Started");
+function extractKickstarterPledged(metrics: Array<{ label: string; value: string }>) {
+  const metric = metrics.find((item) => item.label === "Pledged");
 
-  if (!startedMetric?.value) {
+  if (!metric) {
+    return -1;
+  }
+
+  const match = metric.value.replace(/,/g, "").match(/\d+(?:\.\d+)?/);
+  return match ? Number(match[0]) : -1;
+}
+
+function extractKickstarterStartedAtTs(metrics: Array<{ label: string; value: string }>) {
+  const metric = metrics.find((item) => item.label === "Started");
+
+  if (!metric?.value || !/^\d{4}-\d{2}-\d{2}$/.test(metric.value)) {
+    return -1;
+  }
+
+  const parsed = new Date(`${metric.value}T00:00:00.000Z`).getTime();
+  return Number.isFinite(parsed) ? parsed : -1;
+}
+
+function compareKickstarterEventsByPledged(left: EventSummaryView, right: EventSummaryView) {
+  const pledgedDelta = extractKickstarterPledged(right.metrics) - extractKickstarterPledged(left.metrics);
+
+  if (pledgedDelta !== 0) {
+    return pledgedDelta;
+  }
+
+  const startedDelta = extractKickstarterStartedAtTs(right.metrics) - extractKickstarterStartedAtTs(left.metrics);
+
+  if (startedDelta !== 0) {
+    return startedDelta;
+  }
+
+  const recencyDelta = right.timePrimary.getTime() - left.timePrimary.getTime();
+
+  if (recencyDelta !== 0) {
+    return recencyDelta;
+  }
+
+  return left.displayRank - right.displayRank;
+}
+
+function getKickstarterTimeWindowDays(value: KickstarterTimeWindow) {
+  if (value === "all") {
     return null;
   }
 
-  const normalized = compactFilterValue(startedMetric.value);
-
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
-    return null;
-  }
-
-  const parsed = new Date(`${normalized}T00:00:00.000Z`).getTime();
+  const parsed = Number(value.replace("d", ""));
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isKickstarterEventWithinWindow(event: EventSummaryView, maxAgeDays: number, nowTs: number) {
+  const startedAtTs = extractKickstarterStartedAtTs(event.metrics);
+
+  if (startedAtTs < 0) {
+    return false;
+  }
+
+  return startedAtTs >= nowTs - maxAgeDays * DAY_IN_MS;
 }
 
 function buildArxivFilterHaystack(event: EventSummaryView) {
@@ -249,44 +298,67 @@ export function EventBoard({
   const [detailReloadTokenById, setDetailReloadTokenById] = useState<Record<string, number>>({});
   const [expandedPeopleByEventId, setExpandedPeopleByEventId] = useState<Record<string, boolean>>({});
   const [arxivTimeWindow, setArxivTimeWindow] = useState<ArxivTimeWindow>(() => normalizeArxivTimeWindow(searchParamsTime));
+  const [kickstarterTimeWindow, setKickstarterTimeWindow] = useState<KickstarterTimeWindow>(
+    () => normalizeKickstarterTimeWindow(searchParamsKickstarterTime),
+  );
   const [arxivCategories, setArxivCategories] = useState<ArxivCategory[]>(
     () => normalizeArxivCategories(searchParamsCategories).length > 0
       ? normalizeArxivCategories(searchParamsCategories)
       : mapLegacyTopicToCategories(searchParamsTopic),
-  );
-  const [kickstarterTimeWindow, setKickstarterTimeWindow] = useState<KickstarterTimeWindow>(() =>
-    normalizeKickstarterTimeWindow(searchParamsKickstarterTime),
   );
   const [status, setStatus] = useState("");
   const sectionsToRender = useMemo(
     () => (visibleSources?.length ? [...new Set(visibleSources)] : (["github", "kickstarter", "arxiv"] as EventSource[])),
     [visibleSources],
   );
-  const enableKickstarterFilters = sectionsToRender.length === 1 && sectionsToRender[0] === "kickstarter";
 
   const allEvents = useMemo(() => [...githubEvents, ...kickstarterEvents, ...arxivEvents], [arxivEvents, githubEvents, kickstarterEvents]);
   const selectedArxivCategories = useMemo(() => new Set(arxivCategories), [arxivCategories]);
+  const enableKickstarterFilters = pathname === "/kickstarter";
+  const kickstarterWindowDays = getKickstarterTimeWindowDays(kickstarterTimeWindow);
+  const eligibleKickstarterEvents = useMemo(
+    () =>
+      kickstarterEvents.filter((event) =>
+        isKickstarterEventWithinWindow(event, KICKSTARTER_MAX_VISIBLE_AGE_DAYS, filterNowTs),
+      ),
+    [filterNowTs, kickstarterEvents],
+  );
+  const sortedKickstarterEvents = useMemo(
+    () => [...eligibleKickstarterEvents].sort(compareKickstarterEventsByPledged),
+    [eligibleKickstarterEvents],
+  );
+  const kickstarterWindowMatches = useMemo(
+    () =>
+      kickstarterWindowDays === null
+        ? sortedKickstarterEvents
+        : sortedKickstarterEvents.filter((event) => isKickstarterEventWithinWindow(event, kickstarterWindowDays, filterNowTs)),
+    [filterNowTs, kickstarterWindowDays, sortedKickstarterEvents],
+  );
   const filteredKickstarterEvents = useMemo(() => {
-    if (!enableKickstarterFilters || kickstarterTimeWindow === "all") {
-      return kickstarterEvents;
+    if (!enableKickstarterFilters) {
+      return eligibleKickstarterEvents;
     }
 
-    const maxAgeDays = Number(kickstarterTimeWindow.replace("d", ""));
-
-    if (!Number.isFinite(maxAgeDays)) {
-      return kickstarterEvents;
+    if (kickstarterTimeWindow === "all") {
+      return sortedKickstarterEvents.slice(0, DEFAULT_VISIBLE_COUNT);
     }
 
-    return kickstarterEvents.filter((event) => {
-      const startedAtTs = getKickstarterStartedAt(event);
+    if (kickstarterWindowMatches.length >= DEFAULT_VISIBLE_COUNT) {
+      return kickstarterWindowMatches.slice(0, DEFAULT_VISIBLE_COUNT);
+    }
 
-      if (!startedAtTs) {
-        return false;
-      }
+    const selectedIds = new Set(kickstarterWindowMatches.map((event) => event.stableId));
+    const backfillEvents = sortedKickstarterEvents.filter((event) => !selectedIds.has(event.stableId));
 
-      return startedAtTs >= filterNowTs - maxAgeDays * DAY_IN_MS;
-    });
-  }, [enableKickstarterFilters, filterNowTs, kickstarterEvents, kickstarterTimeWindow]);
+    return [...kickstarterWindowMatches, ...backfillEvents].slice(0, DEFAULT_VISIBLE_COUNT);
+  }, [
+    eligibleKickstarterEvents,
+    enableKickstarterFilters,
+    kickstarterEvents,
+    kickstarterTimeWindow,
+    kickstarterWindowMatches,
+    sortedKickstarterEvents,
+  ]);
   const filteredArxivEvents = useMemo(() => {
     if (!enableArxivFilters) {
       return arxivEvents;
@@ -315,7 +387,6 @@ export function EventBoard({
     });
   }, [arxivEvents, arxivTimeWindow, enableArxivFilters, filterNowTs, selectedArxivCategories]);
   const hasActiveArxivFilters = enableArxivFilters && (arxivTimeWindow !== "all" || arxivCategories.length > 0);
-  const hasActiveKickstarterFilters = enableKickstarterFilters && kickstarterTimeWindow !== "all";
   const renderedSectionEvents = useMemo(
     () =>
       sectionsToRender.flatMap((source) =>
@@ -324,7 +395,7 @@ export function EventBoard({
           : source === "kickstarter"
             ? enableKickstarterFilters
               ? filteredKickstarterEvents
-              : kickstarterEvents
+              : eligibleKickstarterEvents
             : enableArxivFilters
               ? filteredArxivEvents
               : arxivEvents,
@@ -336,7 +407,7 @@ export function EventBoard({
       filteredArxivEvents,
       filteredKickstarterEvents,
       githubEvents,
-      kickstarterEvents,
+      eligibleKickstarterEvents,
       sectionsToRender,
     ],
   );
@@ -746,7 +817,7 @@ export function EventBoard({
         : source === "kickstarter"
           ? enableKickstarterFilters
             ? filteredKickstarterEvents
-            : kickstarterEvents
+            : eligibleKickstarterEvents
           : enableArxivFilters
             ? filteredArxivEvents
             : arxivEvents;
@@ -770,7 +841,7 @@ export function EventBoard({
     filteredArxivEvents,
     filteredKickstarterEvents,
     githubEvents,
-    kickstarterEvents,
+    eligibleKickstarterEvents,
     searchParamsEvent,
     visibleCounts,
   ]);
@@ -1220,8 +1291,8 @@ export function EventBoard({
     setArxivCategories([]);
   }
 
-  function clearKickstarterFilters() {
-    setKickstarterTimeWindow("all");
+  function toggleKickstarterTimeWindow(nextTimeWindow: KickstarterTimeWindow, checked: boolean) {
+    setKickstarterTimeWindow(checked ? nextTimeWindow : "all");
   }
 
   function toggleArxivTimeWindow(nextTimeWindow: ArxivTimeWindow, checked: boolean) {
@@ -1236,10 +1307,6 @@ export function EventBoard({
     );
   }
 
-  function toggleKickstarterTimeWindow(nextTimeWindow: KickstarterTimeWindow, checked: boolean) {
-    setKickstarterTimeWindow(checked ? nextTimeWindow : "all");
-  }
-
   function renderSection(source: EventSource, events: EventSummaryView[]) {
     const config = SECTION_CONFIG[source];
     const isCollapsed = collapsedSections[source];
@@ -1250,17 +1317,25 @@ export function EventBoard({
           ? filteredArxivEvents
           : events;
     const totalDisplayedCount = displayedEvents.length;
+    const sectionEventCount = source === "kickstarter" && enableKickstarterFilters ? totalDisplayedCount : events.length;
     const visibleCount = visibleCounts[source];
     const defaultVisibleCount = getDefaultVisibleCount(source);
-    const visibleEvents = displayedEvents.slice(0, visibleCount);
+    const visibleEvents =
+      source === "kickstarter" && enableKickstarterFilters
+        ? displayedEvents
+        : displayedEvents.slice(0, visibleCount);
     const sectionPersonIds = new Set(events.flatMap((event) => event.personStableIds));
     const sectionPeopleCount = sectionPersonIds.size;
     const savedInSectionCount = [...sectionPersonIds].filter((personStableId) => savedPersonIds.has(personStableId)).length;
-    const showArxivFilters = source === "arxiv" && enableArxivFilters;
     const showKickstarterFilters = source === "kickstarter" && enableKickstarterFilters;
+    const showArxivFilters = source === "arxiv" && enableArxivFilters;
     const showArxivUnderflowNotice = showArxivFilters && hasActiveArxivFilters && totalDisplayedCount < ARXIV_VISIBLE_LIMIT;
-    const showKickstarterUnderflowNotice =
-      showKickstarterFilters && hasActiveKickstarterFilters && totalDisplayedCount < DEFAULT_VISIBLE_COUNT;
+    const showKickstarterBackfillNotice =
+      showKickstarterFilters &&
+      kickstarterTimeWindow !== "all" &&
+      kickstarterWindowMatches.length < DEFAULT_VISIBLE_COUNT &&
+      eligibleKickstarterEvents.length > kickstarterWindowMatches.length &&
+      totalDisplayedCount > kickstarterWindowMatches.length;
 
     return (
       <section className="board-section" key={source} id={`section-${source}`}>
@@ -1288,7 +1363,7 @@ export function EventBoard({
                 ) : (
                   config.title
                 )}{" "}
-                <span>· {events.length} 条近期事件</span>
+                <span>· {sectionEventCount} 条近期事件</span>
               </h2>
             </div>
             <p className="board-section__copy">{config.description}</p>
@@ -1298,7 +1373,7 @@ export function EventBoard({
             <div className="board-section__summary">
               <article className="section-stat">
                 <span>Events</span>
-                <strong>{events.length}</strong>
+                <strong>{sectionEventCount}</strong>
               </article>
               <article className="section-stat">
                 <span>People</span>
@@ -1312,7 +1387,7 @@ export function EventBoard({
 
             <div className="board-section__actions">
               <SourceRefreshButton source={source} />
-              {!isCollapsed && !showArxivFilters && totalDisplayedCount > defaultVisibleCount ? (
+              {!isCollapsed && !showArxivFilters && !showKickstarterFilters && totalDisplayedCount > defaultVisibleCount ? (
                 <button type="button" className="ghost-button" onClick={() => toggleVisibleCount(source, totalDisplayedCount)}>
                   {visibleCount >= totalDisplayedCount ? "收起列表" : showArxivFilters ? "查看更多结果" : "查看更多"}
                 </button>
@@ -1321,7 +1396,43 @@ export function EventBoard({
           </div>
         </div>
 
-        {showArxivFilters ? (
+        {showKickstarterFilters ? (
+          <div className="arxiv-filter-shell">
+            <div className="arxiv-filter-group" role="group" aria-label="Kickstarter 开始时间筛选">
+              <span className="arxiv-filter-group__label">开始时间</span>
+              <div className="arxiv-filter-group__checks">
+                {KICKSTARTER_TIME_WINDOWS.map((windowOption) => (
+                  <label
+                    key={windowOption.value}
+                    className={`filter-checkbox ${kickstarterTimeWindow === windowOption.value ? "is-active" : ""}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={kickstarterTimeWindow === windowOption.value}
+                      onChange={(changeEvent) => toggleKickstarterTimeWindow(windowOption.value, changeEvent.target.checked)}
+                    />
+                    <span className="filter-checkbox__control" aria-hidden="true" />
+                    <span className="filter-checkbox__label">{windowOption.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="arxiv-filter-toolbar">
+              <p className="arxiv-filter-summary">
+                {kickstarterTimeWindow === "all"
+                  ? `当前展示 ${totalDisplayedCount} / ${eligibleKickstarterEvents.length} 个项目`
+                  : `${kickstarterWindowMatches.length} / ${eligibleKickstarterEvents.length} 个项目落在时间窗内，当前展示 ${totalDisplayedCount} 个`}
+              </p>
+            </div>
+
+            {showKickstarterBackfillNotice ? (
+              <p className="arxiv-filter-note">
+                当前时间窗内只有 {kickstarterWindowMatches.length} 个项目，已按筹款金额补入 90 天内更早项目，保证展示 10 张卡片。
+              </p>
+            ) : null}
+          </div>
+        ) : showArxivFilters ? (
           <div className="arxiv-filter-shell">
             <div className="arxiv-filter-group" role="group" aria-label="论文时间筛选">
               <span className="arxiv-filter-group__label">时间</span>
@@ -1375,45 +1486,6 @@ export function EventBoard({
             {showArxivUnderflowNotice ? (
               <p className="arxiv-filter-note">
                 当前仅找到 {totalDisplayedCount} 篇符合条件的论文。可尝试放宽时间窗，或清空类目筛选。
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-
-        {showKickstarterFilters ? (
-          <div className="arxiv-filter-shell">
-            <div className="arxiv-filter-group" role="group" aria-label="Kickstarter 开始时间筛选">
-              <span className="arxiv-filter-group__label">开始筹款</span>
-              <div className="arxiv-filter-group__checks">
-                {KICKSTARTER_TIME_WINDOWS.map((windowOption) => (
-                  <label
-                    key={windowOption.value}
-                    className={`filter-checkbox ${kickstarterTimeWindow === windowOption.value ? "is-active" : ""}`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={kickstarterTimeWindow === windowOption.value}
-                      onChange={(changeEvent) => toggleKickstarterTimeWindow(windowOption.value, changeEvent.target.checked)}
-                    />
-                    <span className="filter-checkbox__control" aria-hidden="true" />
-                    <span className="filter-checkbox__label">{windowOption.label}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            <div className="arxiv-filter-toolbar">
-              <p className="arxiv-filter-summary">
-                {totalDisplayedCount} / {events.length} 个匹配
-              </p>
-              <button type="button" className="ghost-button" onClick={clearKickstarterFilters}>
-                清空筛选
-              </button>
-            </div>
-
-            {showKickstarterUnderflowNotice ? (
-              <p className="arxiv-filter-note">
-                当前仅找到 {totalDisplayedCount} 个符合开始时间条件的 campaign。可尝试放宽时间窗，或清空筛选。
               </p>
             ) : null}
           </div>
@@ -2067,7 +2139,7 @@ export function EventBoard({
   return (
     <div className="board-layout">
       {sectionsToRender.map((source) =>
-        renderSection(source, source === "github" ? githubEvents : source === "kickstarter" ? kickstarterEvents : arxivEvents),
+        renderSection(source, source === "github" ? githubEvents : source === "kickstarter" ? eligibleKickstarterEvents : arxivEvents),
       )}
     </div>
   );

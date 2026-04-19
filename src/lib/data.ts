@@ -7,6 +7,11 @@ import {
   buildGitHubProjectIntroZh,
   looksLikeMalformedGitHubIntro,
 } from "@/lib/github-copy";
+import {
+  KICKSTARTER_MAX_VISIBLE_AGE_DAYS,
+  KICKSTARTER_MIN_PLEDGED_USD,
+  KICKSTARTER_PAGE_POOL_LIMIT,
+} from "@/lib/kickstarter-config";
 import { generateGitHubProjectAnalysis } from "@/lib/github-project-analysis";
 import { generateKickstarterCampaignAnalysis } from "@/lib/kickstarter-analysis";
 import { readStringArray } from "@/lib/json";
@@ -161,6 +166,7 @@ type PipelineEventRecord = Prisma.EventGetPayload<{
 const CARD_SOURCE_SUMMARY_LIMIT = 220;
 const DETAIL_SOURCE_SUMMARY_LIMIT = 560;
 const HOMEPAGE_VISIBLE_LIMIT = 10;
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const countFormatter = new Intl.NumberFormat("en-US");
 
 function normalizeIdentitySummaryZh(value: string) {
@@ -233,6 +239,11 @@ function extractKickstarterPledged(metrics: Array<{ label: string; value: string
   return match ? Number(match[0]) : -1;
 }
 
+function passesKickstarterMinPledgedThreshold(metrics: Array<{ label: string; value: string }>) {
+  const pledgedAmount = extractKickstarterPledged(metrics);
+  return pledgedAmount < 0 || pledgedAmount >= KICKSTARTER_MIN_PLEDGED_USD;
+}
+
 function extractKickstarterStartedAtTs(metrics: Array<{ label: string; value: string }>) {
   const metric = metrics.find((item) => item.label === "Started");
 
@@ -264,6 +275,42 @@ function compareKickstarterEvents(left: EventSummaryView, right: EventSummaryVie
   }
 
   return left.displayRank - right.displayRank;
+}
+
+function compareKickstarterEventsByPledged(left: EventSummaryView, right: EventSummaryView) {
+  const pledgedDelta = extractKickstarterPledged(right.metrics) - extractKickstarterPledged(left.metrics);
+
+  if (pledgedDelta !== 0) {
+    return pledgedDelta;
+  }
+
+  const startedDelta = extractKickstarterStartedAtTs(right.metrics) - extractKickstarterStartedAtTs(left.metrics);
+
+  if (startedDelta !== 0) {
+    return startedDelta;
+  }
+
+  const recencyDelta = right.timePrimary.getTime() - left.timePrimary.getTime();
+
+  if (recencyDelta !== 0) {
+    return recencyDelta;
+  }
+
+  return left.displayRank - right.displayRank;
+}
+
+function isKickstarterEventWithinWindow(event: EventSummaryView, maxAgeDays: number, nowTs: number) {
+  const startedAtTs = extractKickstarterStartedAtTs(event.metrics);
+
+  if (startedAtTs < 0) {
+    return false;
+  }
+
+  return startedAtTs >= nowTs - maxAgeDays * DAY_IN_MS;
+}
+
+function filterKickstarterEventsByWindow(events: EventSummaryView[], maxAgeDays: number, nowTs: number) {
+  return events.filter((event) => isKickstarterEventWithinWindow(event, maxAgeDays, nowTs));
 }
 
 function compactCopy(value: string | null | undefined) {
@@ -828,7 +875,13 @@ async function mapEventDetail(
   };
 }
 
-async function getBoardData(options?: { githubLimit?: number; kickstarterLimit?: number; arxivLimit?: number }) {
+async function getBoardData(options?: {
+  githubLimit?: number;
+  kickstarterLimit?: number;
+  arxivLimit?: number;
+  kickstarterWindowDays?: number | readonly number[];
+  kickstarterSort?: "started" | "pledged";
+}) {
   const activeDataset = await ensureActiveDataset(prisma);
   const [savedEntries, previousDataset] = await Promise.all([
     prisma.pipelineEntry.findMany({
@@ -900,6 +953,7 @@ async function getBoardData(options?: { githubLimit?: number; kickstarterLimit?:
     ? new Set(previousEvents.map((event) => event.stableId))
     : null;
   const mappedEvents = events.map((event) => mapEventSummary(event, savedPeople, previousEventStableIds));
+  const nowTs = Date.now();
 
   const githubEvents = mappedEvents
     .filter((event) => event.sourceType === "github")
@@ -909,9 +963,29 @@ async function getBoardData(options?: { githubLimit?: number; kickstarterLimit?:
       ...event,
       displayRank: index + 1,
     }));
-  const kickstarterEvents = mappedEvents
-    .filter((event) => event.sourceType === "kickstarter")
-    .sort(compareKickstarterEvents)
+  const allKickstarterEvents = mappedEvents.filter(
+    (event) => event.sourceType === "kickstarter" && passesKickstarterMinPledgedThreshold(event.metrics),
+  );
+  const eligibleKickstarterEvents = filterKickstarterEventsByWindow(
+    allKickstarterEvents,
+    KICKSTARTER_MAX_VISIBLE_AGE_DAYS,
+    nowTs,
+  );
+  const kickstarterWindowDays = options?.kickstarterWindowDays;
+  const kickstarterEvents = (
+    Array.isArray(kickstarterWindowDays)
+      ? kickstarterWindowDays.reduce<EventSummaryView[]>((selected, maxAgeDays) => {
+          if (selected.length > 0) {
+            return selected;
+          }
+
+          return filterKickstarterEventsByWindow(eligibleKickstarterEvents, maxAgeDays, nowTs);
+        }, [])
+      : typeof kickstarterWindowDays === "number"
+        ? filterKickstarterEventsByWindow(eligibleKickstarterEvents, kickstarterWindowDays, nowTs)
+        : eligibleKickstarterEvents
+  )
+    .sort(options?.kickstarterSort === "pledged" ? compareKickstarterEventsByPledged : compareKickstarterEvents)
     .slice(0, options?.kickstarterLimit ?? HOMEPAGE_VISIBLE_LIMIT)
     .map((event, index) => ({
       ...event,
@@ -956,6 +1030,8 @@ export async function getKickstarterPageData() {
   return getBoardData({
     githubLimit: 0,
     arxivLimit: 0,
+    kickstarterLimit: KICKSTARTER_PAGE_POOL_LIMIT,
+    kickstarterSort: "pledged",
   });
 }
 

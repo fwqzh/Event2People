@@ -823,8 +823,7 @@ describe("EventBoard", () => {
     expect(previewImage).toHaveAttribute("src", "https://images.example.com/orbital-coder.jpg");
   });
 
-  it("filters kickstarter campaigns by started date, syncs the URL, and hides entries without started metadata", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(new Date("2026-03-26T12:00:00.000Z").getTime());
+  it("shows kickstarter filter controls, syncs the selected time window, and backfills to ten cards", async () => {
     const user = userEvent.setup();
     mockPathname = "/kickstarter";
 
@@ -851,40 +850,56 @@ describe("EventBoard", () => {
         githubEvents: [],
         kickstarterEvents: [
           createKickstarterSummaryEvent({
-            stableId: "event:kickstarter:recent",
-            cardTitle: "Recent Launch",
-            eventTitleZh: "Recent Launch",
+            stableId: "event:kickstarter:recent-high",
+            cardTitle: "Recent High",
+            eventTitleZh: "Recent High",
             metrics: [
-              { label: "Pledged", value: "$40,000" },
-              { label: "Started", value: "2026-03-20" },
+              { label: "Pledged", value: "$200,000" },
+              { label: "Started", value: "2026-04-17" },
               { label: "Goal", value: "$20,000" },
               { label: "Backers", value: "500" },
               { label: "Days Left", value: "10 days" },
             ],
           }),
           createKickstarterSummaryEvent({
-            stableId: "event:kickstarter:older",
-            cardTitle: "Older Launch",
-            eventTitleZh: "Older Launch",
+            stableId: "event:kickstarter:recent-low",
+            cardTitle: "Recent Low",
+            eventTitleZh: "Recent Low",
             displayRank: 2,
             metrics: [
-              { label: "Pledged", value: "$400,000" },
-              { label: "Started", value: "2025-12-20" },
+              { label: "Pledged", value: "$50,000" },
+              { label: "Started", value: "2026-04-15" },
               { label: "Goal", value: "$20,000" },
-              { label: "Backers", value: "2,500" },
+              { label: "Backers", value: "500" },
               { label: "Days Left", value: "10 days" },
             ],
           }),
+          ...Array.from({ length: 9 }, (_, index) =>
+            createKickstarterSummaryEvent({
+              stableId: `event:kickstarter:older-${index + 1}`,
+              cardTitle: `Older ${index + 1}`,
+              eventTitleZh: `Older ${index + 1}`,
+              displayRank: index + 3,
+              metrics: [
+                { label: "Pledged", value: `$${190 - index * 20},000` },
+                { label: "Started", value: "2026-03-20" },
+                { label: "Goal", value: "$20,000" },
+                { label: "Backers", value: "500" },
+                { label: "Days Left", value: "10 days" },
+              ],
+            }),
+          ),
           createKickstarterSummaryEvent({
-            stableId: "event:kickstarter:no-started",
-            cardTitle: "No Started Metric",
-            eventTitleZh: "No Started Metric",
-            displayRank: 3,
+            stableId: "event:kickstarter:ancient-whale",
+            cardTitle: "Ancient Whale",
+            eventTitleZh: "Ancient Whale",
+            displayRank: 12,
             metrics: [
-              { label: "Pledged", value: "$90,000" },
-              { label: "Goal", value: "$30,000" },
-              { label: "Backers", value: "900" },
-              { label: "Status", value: "Live" },
+              { label: "Pledged", value: "$990,000" },
+              { label: "Started", value: "2025-12-01" },
+              { label: "Goal", value: "$20,000" },
+              { label: "Backers", value: "500" },
+              { label: "Days Left", value: "10 days" },
             ],
           }),
         ],
@@ -895,22 +910,21 @@ describe("EventBoard", () => {
 
     expect(screen.getByRole("group", { name: "Kickstarter 开始时间筛选" })).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "全部" })).toBeChecked();
-    expect(screen.getByText("3 / 3 个匹配")).toBeInTheDocument();
+    expect(screen.getByText("当前展示 10 / 11 个项目")).toBeInTheDocument();
+    expect(screen.getByText("Recent High")).toBeInTheDocument();
+    expect(screen.queryByText("Ancient Whale")).not.toBeInTheDocument();
+    expect(screen.queryByText("Older 9")).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("checkbox", { name: "30天" }));
+    await user.click(screen.getByRole("checkbox", { name: "7天" }));
 
-    expect(screen.getByText("1 / 3 个匹配")).toBeInTheDocument();
-    expect(screen.getByText("Recent Launch")).toBeInTheDocument();
-    expect(screen.queryByText("Older Launch")).not.toBeInTheDocument();
-    expect(screen.queryByText("No Started Metric")).not.toBeInTheDocument();
-    expect(screen.getByText("当前仅找到 1 个符合开始时间条件的 campaign。可尝试放宽时间窗，或清空筛选。")).toBeInTheDocument();
-    expect(String(routerReplaceMock.mock.lastCall?.[0])).toContain("kickstarterTime=30d");
-
-    await user.click(screen.getByRole("button", { name: "清空筛选" }));
-
-    expect(screen.getByText("3 / 3 个匹配")).toBeInTheDocument();
-    expect(screen.getByText("Older Launch")).toBeInTheDocument();
-    expect(screen.getByText("No Started Metric")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "7天" })).toBeChecked();
+    expect(screen.getByText("2 / 11 个项目落在时间窗内，当前展示 10 个")).toBeInTheDocument();
+    expect(screen.getByText("当前时间窗内只有 2 个项目，已按筹款金额补入 90 天内更早项目，保证展示 10 张卡片。")).toBeInTheDocument();
+    expect(screen.getByText("Recent Low")).toBeInTheDocument();
+    expect(screen.getByText("Older 8")).toBeInTheDocument();
+    expect(screen.queryByText("Ancient Whale")).not.toBeInTheDocument();
+    expect(screen.queryByText("Older 9")).not.toBeInTheDocument();
+    expect(String(routerReplaceMock.mock.lastCall?.[0])).toContain("kickstarterTime=7d");
   });
 
   it("marks only newly appeared cards with a NEW badge", async () => {
@@ -1311,8 +1325,7 @@ describe("EventBoard", () => {
     expect(screen.queryByRole("group", { name: "论文类目筛选" })).not.toBeInTheDocument();
   });
 
-  it("hydrates kickstarter started-time filters from the URL and keeps them hidden elsewhere", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(new Date("2026-03-28T12:00:00.000Z").getTime());
+  it("hydrates kickstarter filters from the URL and keeps them hidden elsewhere", () => {
     mockPathname = "/kickstarter";
     mockSearchParams = new URLSearchParams("kickstarterTime=14d");
 
@@ -1357,7 +1370,7 @@ describe("EventBoard", () => {
             displayRank: 2,
             metrics: [
               { label: "Pledged", value: "$400,000" },
-              { label: "Started", value: "2025-12-20" },
+              { label: "Started", value: "2026-02-20" },
               { label: "Goal", value: "$20,000" },
               { label: "Backers", value: "2,500" },
               { label: "Days Left", value: "10 days" },
@@ -1369,10 +1382,10 @@ describe("EventBoard", () => {
       }),
     );
 
+    expect(screen.getByRole("group", { name: "Kickstarter 开始时间筛选" })).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "14天" })).toBeChecked();
-    expect(screen.getByText("1 / 2 个匹配")).toBeInTheDocument();
     expect(screen.getByText("Recent Launch")).toBeInTheDocument();
-    expect(screen.queryByText("Older Launch")).not.toBeInTheDocument();
+    expect(screen.getByText("Older Launch")).toBeInTheDocument();
     expect(routerReplaceMock).not.toHaveBeenCalled();
 
     mockPathname = "/github";

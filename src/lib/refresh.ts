@@ -4,6 +4,11 @@ import { Prisma, PrismaClient } from "@prisma/client";
 import { classifyEventTag } from "@/lib/event-tag";
 import { buildGitHubProjectIntroZh } from "@/lib/github-copy";
 import { readStringArray } from "@/lib/json";
+import {
+  KICKSTARTER_MIN_PLEDGED_USD,
+  KICKSTARTER_RECENT_TARGET,
+  KICKSTARTER_REFRESH_FETCH_LIMIT,
+} from "@/lib/kickstarter-config";
 import { shouldMergePeople } from "@/lib/merge-people";
 import { enrichBundleWithOpenAI } from "@/lib/openai-enrichment";
 import { buildPaperExplanationZh } from "@/lib/paper-copy";
@@ -28,10 +33,9 @@ import { clampZh, formatDay, repoDisplayName, sentenceZh, slugify, uniqueStrings
 import type { DatasetBundleInput, EventInput, PaperInput, PersonInput, ProjectInput, RepoPaperLinkInput } from "@/lib/types";
 
 const GITHUB_REFRESH_FETCH_LIMIT = 10;
-const KICKSTARTER_REFRESH_FETCH_LIMIT = 10;
 const HOMEPAGE_ARXIV_LIMIT = 10;
 const ARXIV_ACTIVE_POOL_LIMIT = 50;
-const AI_EVENT_ENRICH_LIMIT = GITHUB_REFRESH_FETCH_LIMIT + KICKSTARTER_REFRESH_FETCH_LIMIT + HOMEPAGE_ARXIV_LIMIT;
+const AI_EVENT_ENRICH_LIMIT = GITHUB_REFRESH_FETCH_LIMIT + KICKSTARTER_RECENT_TARGET + HOMEPAGE_ARXIV_LIMIT;
 const STALE_REFRESH_MINUTES = 15;
 const KICKSTARTER_FALLBACK_EXCLUSION_PATTERN =
   /(board game|tabletop|video game|card game|miniatures|rpg|ttrpg|comic|manga|graphic novel|novel|book launch|feature film|short film|film|movie|album|soundtrack|tarot|zine|playmat|expansion|桌游|卡牌|电子游戏|游戏|角色扮演|漫画|小说|电影|专辑|塔罗|扩展)/i;
@@ -187,6 +191,11 @@ type StoredProjectRecord = {
 
 type KickstarterFallbackEventRecord = Prisma.EventGetPayload<{
   include: {
+    datasetVersion: {
+      select: {
+        publishedAt: true;
+      };
+    };
     personLinks: {
       orderBy: {
         position: "asc";
@@ -869,6 +878,56 @@ function isRelevantKickstarterFallbackEvent(event: EventInput) {
   return !KICKSTARTER_FALLBACK_EXCLUSION_PATTERN.test(haystack);
 }
 
+function extractKickstarterFallbackStartedAtTs(metrics: EventInput["metrics"]) {
+  const startedMetric = metrics.find((metric) => metric.label === "Started");
+
+  if (!startedMetric?.value || !/^\d{4}-\d{2}-\d{2}$/.test(startedMetric.value)) {
+    return -1;
+  }
+
+  const parsed = new Date(`${startedMetric.value}T00:00:00.000Z`).getTime();
+  return Number.isFinite(parsed) ? parsed : -1;
+}
+
+function extractKickstarterFallbackPledgedAmount(metrics: EventInput["metrics"]) {
+  const pledgedMetric = metrics.find((metric) => metric.label === "Pledged");
+
+  if (!pledgedMetric?.value) {
+    return -1;
+  }
+
+  const match = pledgedMetric.value.replace(/,/g, "").match(/\d+(?:\.\d+)?/);
+  return match ? Number(match[0]) : -1;
+}
+
+function passesKickstarterFallbackMinPledgedThreshold(metrics: EventInput["metrics"]) {
+  const pledgedAmount = extractKickstarterFallbackPledgedAmount(metrics);
+  return pledgedAmount < 0 || pledgedAmount >= KICKSTARTER_MIN_PLEDGED_USD;
+}
+
+function compareKickstarterFallbackRecords(
+  left: { raw: KickstarterFallbackEventRecord; input: EventInput },
+  right: { raw: KickstarterFallbackEventRecord; input: EventInput },
+) {
+  const startedDelta =
+    extractKickstarterFallbackStartedAtTs(right.input.metrics) -
+    extractKickstarterFallbackStartedAtTs(left.input.metrics);
+
+  if (startedDelta !== 0) {
+    return startedDelta;
+  }
+
+  const publishedAtDelta =
+    Number(right.raw.datasetVersion?.publishedAt?.getTime() ?? -1) -
+    Number(left.raw.datasetVersion?.publishedAt?.getTime() ?? -1);
+
+  if (publishedAtDelta !== 0) {
+    return publishedAtDelta;
+  }
+
+  return left.input.displayRank - right.input.displayRank;
+}
+
 async function loadKickstarterFallbackCampaigns(prisma: ArxivRefreshFallbackPrisma, limit: number) {
   const fallbackPool = await prisma.event.findMany({
     where: {
@@ -880,6 +939,11 @@ async function loadKickstarterFallbackCampaigns(prisma: ArxivRefreshFallbackPris
       },
     },
     include: {
+      datasetVersion: {
+        select: {
+          publishedAt: true,
+        },
+      },
       personLinks: {
         orderBy: { position: "asc" },
         include: { person: true },
@@ -898,10 +962,6 @@ async function loadKickstarterFallbackCampaigns(prisma: ArxivRefreshFallbackPris
 
     seenStableIds.add(event.stableId);
     dedupedEvents.push(event);
-
-    if (dedupedEvents.length >= limit) {
-      break;
-    }
   }
 
   const mappedFallback = dedupedEvents
@@ -909,7 +969,11 @@ async function loadKickstarterFallbackCampaigns(prisma: ArxivRefreshFallbackPris
       raw: event,
       input: mapFallbackKickstarterEventToInput(event),
     }))
-    .filter((record) => isRelevantKickstarterFallbackEvent(record.input))
+    .filter(
+      (record) =>
+        isRelevantKickstarterFallbackEvent(record.input) && passesKickstarterFallbackMinPledgedThreshold(record.input.metrics),
+    )
+    .sort(compareKickstarterFallbackRecords)
     .slice(0, limit);
 
   return {

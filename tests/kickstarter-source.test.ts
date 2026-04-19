@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   coalesceKickstarterCampaigns,
+  createKickstarterCampaignFromProjectPage,
+  extractKickstarterDiscoverCampaignsFromHtml,
+  extractKickstarterDiscoverProjectUrls,
+  extractKickstarterStructuredMetadata,
   normalizeKickstarterCampaignUrl,
   parseKickstarterCampaignCandidate,
 } from "@/lib/sources/kickstarter";
@@ -56,6 +60,142 @@ describe("kickstarter source helpers", () => {
     expect(candidate?.isLive).toBe(true);
   });
 
+  it("extracts canonical project urls from the technology discover newest list", () => {
+    const urls = extractKickstarterDiscoverProjectUrls(`
+      <main>
+        <a href="/projects/dataleakz/dataleakz-data-breach-intelligence-0?ref=discovery_category_newest&total_hits=57485&category_id=332">
+          DataLeakz - Data Breach Intelligence
+        </a>
+        <a href="/projects/dataleakz/dataleakz-data-breach-intelligence-0?ref=discovery_category_newest&total_hits=57485&category_id=332"></a>
+        <a href="/projects/everysight/maverick-full-color-ai-ar-glasses?ref=discovery_category_newest&total_hits=57485&category_id=337">
+          Maverick AI: The Lightest, Full Color AR+AI Glasses
+        </a>
+        <a href="/projects/rewindpix/rewindpix-a-non-disposable-digital-film-camera">
+          Rewindpix
+        </a>
+      </main>
+    `);
+
+    expect(urls).toEqual([
+      "https://www.kickstarter.com/projects/dataleakz/dataleakz-data-breach-intelligence-0",
+      "https://www.kickstarter.com/projects/everysight/maverick-full-color-ai-ar-glasses",
+    ]);
+  });
+
+  it("skips technology discover projects when pledged is below the minimum threshold", () => {
+    const campaigns = extractKickstarterDiscoverCampaignsFromHtml(
+      `
+        <main>
+          <a href="/projects/dataleakz/dataleakz-data-breach-intelligence-0?ref=discovery_category_newest&total_hits=57485&category_id=332">
+            DataLeakz - Data Breach Intelligence
+          </a>
+          <script type="application/json">
+            {&quot;id&quot;:1,&quot;photo&quot;:{&quot;1024x576&quot;:&quot;https://images.example.com/dataleakz.png&quot;},&quot;name&quot;:&quot;DataLeakz - Data Breach Intelligence&quot;,&quot;blurb&quot;:&quot;Dataleakz is a modern breach checker, but more simple and smarter.&quot;,&quot;goal&quot;:10000.0,&quot;pledged&quot;:0.0,&quot;state&quot;:&quot;live&quot;,&quot;slug&quot;:&quot;dataleakz-data-breach-intelligence-0&quot;,&quot;currency&quot;:&quot;USD&quot;,&quot;currency_symbol&quot;:&quot;$&quot;,&quot;deadline&quot;:1781734202,&quot;launched_at&quot;:1776550202,&quot;backers_count&quot;:0,&quot;creator&quot;:{&quot;name&quot;:&quot;Baris Ayarkan&quot;,&quot;urls&quot;:{&quot;web&quot;:{&quot;user&quot;:&quot;https://www.kickstarter.com/profile/dataleakz&quot;}}}}
+          </script>
+        </main>
+      `,
+      new Date("2026-04-18T23:00:00.000Z"),
+    );
+
+    expect(campaigns).toEqual([]);
+  });
+
+  it("hydrates started date and creator metadata from structured project html", () => {
+    const html = `
+      <html>
+        <head>
+          <meta property="og:image" content="https://images.example.com/maverick.png" />
+        </head>
+        <body>
+          <script>
+            window.__data = {
+              "project_creator_name":"Everysight",
+              "project_current_amount_pledged_usd":802476.0,
+              "project_goal_usd":10000.0,
+              "project_backers_count":2009,
+              "project_launched_at":"2026-03-31T09:57:42-04:00",
+              "project_blurb":"OLED In-Lens Display | Native Eye-Tracking | All-day battery life | Only 47g | Live Translation | Rx Ready | AI-Camera | 28° FOV",
+              "project_photo_full":"https://images.example.com/maverick.png"
+            };
+          </script>
+        </body>
+      </html>
+    `;
+    const metadata = extractKickstarterStructuredMetadata(
+      html,
+      "https://www.kickstarter.com/projects/everysight/maverick-full-color-ai-ar-glasses",
+    );
+
+    expect(metadata.creatorName).toBe("Everysight");
+    expect(metadata.imageUrl).toBe("https://images.example.com/maverick.png");
+    expect(metadata.startedAt?.toISOString()).toContain("2026-03-31");
+    expect(metadata.startedLabel).toBe("Mar 31 2026");
+    expect(metadata.pledgedAmount).toBe(802476);
+    expect(metadata.goalAmount).toBe(10000);
+    expect(metadata.backersCount).toBe(2009);
+  });
+
+  it("builds a campaign from a project page using structured launched_at metadata", () => {
+    const candidate = createKickstarterCampaignFromProjectPage({
+      pageTitle: "Maverick AI: The Lightest, Full Color AR+AI Glasses by Everysight — Kickstarter",
+      pageUrl: "https://www.kickstarter.com/projects/everysight/maverick-full-color-ai-ar-glasses",
+      pageText:
+        "Project We Love Wearables Seattle, WA $802,476 pledged of $10,000 goal 2,009 backers 26 days to go " +
+        "Maverick AI: The Lightest, Full Color AR+AI Glasses OLED In-Lens Display | Native Eye-Tracking | All-day battery life | Only 47g | Live Translation | Rx Ready | AI-Camera | 28° FOV",
+      pageHtml: `
+        <script>
+          window.__data = {
+            "project_creator_name":"Everysight",
+            "project_current_amount_pledged_usd":802476.0,
+            "project_goal_usd":10000.0,
+            "project_backers_count":2009,
+            "project_launched_at":"2026-03-31T09:57:42-04:00",
+            "project_blurb":"OLED In-Lens Display | Native Eye-Tracking | All-day battery life | Only 47g | Live Translation | Rx Ready | AI-Camera | 28° FOV",
+            "project_photo_full":"https://images.example.com/maverick.png"
+          };
+        </script>
+      `,
+      now: new Date("2026-04-18T12:00:00.000Z"),
+    });
+
+    expect(candidate).toBeTruthy();
+    expect(candidate?.campaignName).toBe("Maverick AI: The Lightest, Full Color AR+AI Glasses");
+    expect(candidate?.creatorName).toBe("Everysight");
+    expect(candidate?.startedLabel).toBe("Mar 31 2026");
+    expect(candidate?.startedAt?.toISOString()).toContain("2026-03-31");
+    expect(candidate?.pledgedAmount).toBe(802476);
+    expect(candidate?.goalAmount).toBe(10000);
+    expect(candidate?.backersCount).toBe(2009);
+    expect(candidate?.imageUrl).toBe("https://images.example.com/maverick.png");
+  });
+
+  it("drops official technology discover projects when pledged is below the minimum threshold", () => {
+    const candidate = createKickstarterCampaignFromProjectPage({
+      pageTitle: "DataLeakz - Data Breach Intelligence by Baris Ayarkan — Kickstarter",
+      pageUrl: "https://www.kickstarter.com/projects/dataleakz/dataleakz-data-breach-intelligence-0",
+      pageText:
+        "Apps Raleigh, NC $0 pledged of $10,000 goal 0 backers 59 days to go Back this project " +
+        "DataLeakz - Data Breach Intelligence Dataleakz is a modern breach checker, but more simple and smarter. " +
+        "You can search email, username, or domain and see real risk.",
+      pageHtml: `
+        <script>
+          window.__data = {
+            "project_creator_name":"Baris Ayarkan",
+            "project_current_amount_pledged_usd":0.0,
+            "project_goal_usd":10000.0,
+            "project_backers_count":0,
+            "project_launched_at":"2026-04-18T18:10:02-04:00",
+            "project_blurb":"Dataleakz is a modern breach checker, but more simple and smarter. You can search email, username, or domain and see real risk.",
+            "project_photo_full":"https://images.example.com/dataleakz.png"
+          };
+        </script>
+      `,
+      now: new Date("2026-04-18T23:00:00.000Z"),
+    });
+
+    expect(candidate).toBeNull();
+  });
+
   it("accepts recent ai hardware and consumer electronics projects", () => {
     const candidate = parseKickstarterCampaignCandidate({
       title: "Nova Sphere — Give Your AI Assistant a Body by Nova Labs - Kickstarter",
@@ -70,6 +210,19 @@ describe("kickstarter source helpers", () => {
     expect(candidate?.pledgedAmount).toBe(185000);
     expect(candidate?.backersCount).toBe(1240);
     expect(candidate?.isLive).toBe(true);
+  });
+
+  it("filters out campaigns with pledged amounts below ten thousand usd", () => {
+    const candidate = parseKickstarterCampaignCandidate({
+      title: "Pocket Memo AI Recorder by Memo Labs - Kickstarter",
+      url: "https://www.kickstarter.com/projects/memolabs/pocket-memo-ai-recorder",
+      content:
+        "Memo Labs is raising funds for Pocket Memo AI Recorder on Kickstarter! " +
+        "AI voice notes, summary generation, and local transcription. $9,500 pledged of $20,000 goal 182 backers 18 days left.",
+      score: 0.94,
+    });
+
+    expect(candidate).toBeNull();
   });
 
   it("keeps strong ai hardware candidates even when Tavily omits funding metrics", () => {

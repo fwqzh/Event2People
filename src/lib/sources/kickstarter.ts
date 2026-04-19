@@ -1,39 +1,87 @@
 import { load } from "cheerio";
-import { isValid, parse } from "date-fns";
+import { format, isValid, parse } from "date-fns";
 
+import { KICKSTARTER_MIN_PLEDGED_USD, KICKSTARTER_PRE_ENRICH_POOL_LIMIT } from "@/lib/kickstarter-config";
 import { getTavilyApiKey } from "@/lib/runtime-settings";
 import { clampPlainText } from "@/lib/text";
 
 const SEARCH_REQUEST_TIMEOUT_MS = 6_000;
 const CAMPAIGN_IMAGE_REQUEST_TIMEOUT_MS = 5_000;
+const DISCOVER_REQUEST_TIMEOUT_MS = 60_000;
+const DISCOVER_SETTLE_DELAY_MS = 5_000;
 const TAVILY_COUNTRY = "United States";
+const KICKSTARTER_DISCOVER_NEWEST_URL = "https://www.kickstarter.com/discover/advanced?category_id=16&sort=newest";
+const KICKSTARTER_BROWSER_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
+const KICKSTARTER_DISCOVER_URL_LIMIT = 12;
+const KICKSTARTER_DISCOVER_PAGE_LIMIT = 5;
 const NEGATIVE_QUERY_SUFFIX = '-"board game" -tabletop -comic -film -book';
-const QUERY_BUCKETS: ReadonlyArray<{ query: string; timeRange: "week" | "month" }> = [
+const RECENT_DISCOVERY_WINDOWS = [
+  {
+    timeRange: "week",
+    maxResults: 12,
+  },
+  {
+    timeRange: "month",
+    maxResults: 8,
+  },
+] as const;
+const EXTENDED_DISCOVERY_WINDOWS = [
+  {
+    timeRange: "year",
+    maxResults: 12,
+  },
+] as const;
+const SEARCH_PLANS = [
   {
     query: `site:kickstarter.com/projects/ robotics Kickstarter ${NEGATIVE_QUERY_SUFFIX}`,
-    timeRange: "month",
+    windows: RECENT_DISCOVERY_WINDOWS,
   },
   {
     query: `site:kickstarter.com/projects/ camera Kickstarter ${NEGATIVE_QUERY_SUFFIX}`,
-    timeRange: "month",
+    windows: RECENT_DISCOVERY_WINDOWS,
   },
   {
     query: `site:kickstarter.com/projects/ earbuds Kickstarter ${NEGATIVE_QUERY_SUFFIX}`,
-    timeRange: "month",
+    windows: RECENT_DISCOVERY_WINDOWS,
   },
   {
     query: `site:kickstarter.com/projects/ glasses Kickstarter ${NEGATIVE_QUERY_SUFFIX}`,
-    timeRange: "month",
+    windows: RECENT_DISCOVERY_WINDOWS,
   },
   {
     query: `site:kickstarter.com/projects/ "voice recorder" Kickstarter ${NEGATIVE_QUERY_SUFFIX}`,
-    timeRange: "month",
+    windows: RECENT_DISCOVERY_WINDOWS,
   },
   {
     query: `site:kickstarter.com/projects/ wearable Kickstarter ${NEGATIVE_QUERY_SUFFIX}`,
-    timeRange: "month",
+    windows: RECENT_DISCOVERY_WINDOWS,
   },
-];
+  {
+    query: `site:kickstarter.com/projects/ "ai glasses" Kickstarter ${NEGATIVE_QUERY_SUFFIX}`,
+    windows: EXTENDED_DISCOVERY_WINDOWS,
+  },
+  {
+    query: `site:kickstarter.com/projects/ "ai earbuds" Kickstarter ${NEGATIVE_QUERY_SUFFIX}`,
+    windows: EXTENDED_DISCOVERY_WINDOWS,
+  },
+  {
+    query: `site:kickstarter.com/projects/ "ai wearable" Kickstarter ${NEGATIVE_QUERY_SUFFIX}`,
+    windows: EXTENDED_DISCOVERY_WINDOWS,
+  },
+  {
+    query: `site:kickstarter.com/projects/ "ai camera" Kickstarter ${NEGATIVE_QUERY_SUFFIX}`,
+    windows: EXTENDED_DISCOVERY_WINDOWS,
+  },
+  {
+    query: `site:kickstarter.com/projects/ "ai voice recorder" Kickstarter ${NEGATIVE_QUERY_SUFFIX}`,
+    windows: EXTENDED_DISCOVERY_WINDOWS,
+  },
+  {
+    query: `site:kickstarter.com/projects/ "ai audio" Kickstarter ${NEGATIVE_QUERY_SUFFIX}`,
+    windows: EXTENDED_DISCOVERY_WINDOWS,
+  },
+] as const;
 const ALLOWED_PROJECT_SUBPAGES = new Set(["comments", "community", "description", "faq", "faqs", "rewards"]);
 const CURRENCY_TOKEN = String.raw`(?:(?:US|CA|AU|NZ|HK|SG)?\$|€|£)\s?[\d,.]+(?:\s?[KMBkmb])?`;
 const KICKSTARTER_BODY_MARKERS = [
@@ -148,6 +196,28 @@ type KickstarterCampaignSupplement = {
   imageUrl: string | null;
 };
 
+type KickstarterDiscoverProjectRecord = {
+  name: string;
+  blurb: string;
+  goalAmount: number | null;
+  pledgedAmount: number | null;
+  state: string;
+  slug: string;
+  currency: string | null;
+  currencySymbol: string | null;
+  deadlineAt: Date | null;
+  startedAt: Date | null;
+  backersCount: number | null;
+  creatorName: string | null;
+  creatorUrl: string | null;
+  imageUrl: string | null;
+};
+
+type KickstarterDiscoverProjectEntry = {
+  campaignName: string;
+  campaignUrl: string;
+};
+
 export type KickstarterCampaign = {
   campaignName: string;
   campaignUrl: string;
@@ -170,8 +240,395 @@ export type KickstarterCampaign = {
   searchRelevance: number;
 };
 
+type KickstarterStructuredMetadata = {
+  creatorName: string | null;
+  imageUrl: string | null;
+  pledgedAmount: number | null;
+  pledgedLabel: string;
+  goalAmount: number | null;
+  goalLabel: string;
+  backersCount: number | null;
+  backersLabel: string;
+  startedAt: Date | null;
+  startedLabel: string | null;
+  summaryRaw: string;
+};
+
+type KickstarterCandidateParseOptions = {
+  trustTechnologySource?: boolean;
+};
+
 function compactText(value: string | null | undefined) {
   return value?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+function mergeTavilySearchContent(content: string | null | undefined, rawContent: string | null | undefined) {
+  const snippet = compactText(content);
+  const raw = compactText(rawContent);
+
+  if (!snippet) {
+    return raw;
+  }
+
+  if (!raw) {
+    return snippet;
+  }
+
+  if (snippet === raw || snippet.includes(raw)) {
+    return snippet;
+  }
+
+  if (raw.includes(snippet)) {
+    return raw;
+  }
+
+  return compactText(`${snippet}\n\n${raw}`);
+}
+
+function formatKickstarterStartedLabel(date: Date | null) {
+  return date ? format(date, "MMM d yyyy") : null;
+}
+
+function formatUsdLabel(amount: number | null) {
+  return amount === null ? "" : `$${new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(amount)}`;
+}
+
+function decodeKickstarterHtmlEntities(value: string) {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&#34;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+}
+
+function formatKickstarterCurrencyLabel(amount: number | null, currency: string | null, currencySymbol: string | null) {
+  if (amount === null) {
+    return "";
+  }
+
+  const code = compactText(currency).toUpperCase();
+  const symbol = compactText(currencySymbol);
+  const prefix =
+    symbol && symbol !== "$"
+      ? symbol
+      : ({
+          USD: "$",
+          CAD: "CA$",
+          AUD: "AU$",
+          NZD: "NZ$",
+          SGD: "S$",
+          HKD: "HK$",
+        })[code] ??
+        (symbol || (code ? `${code} ` : "$"));
+
+  return `${prefix}${new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(amount)}`;
+}
+
+function meetsKickstarterMinPledgedUsd(amount: number | null) {
+  return amount === null || amount >= KICKSTARTER_MIN_PLEDGED_USD;
+}
+
+function formatKickstarterDaysLeftLabel(deadlineAt: Date | null, now: Date) {
+  if (!deadlineAt) {
+    return null;
+  }
+
+  const deltaMs = deadlineAt.getTime() - now.getTime();
+
+  if (deltaMs <= 0) {
+    return null;
+  }
+
+  const hoursLeft = Math.ceil(deltaMs / (1000 * 60 * 60));
+
+  if (hoursLeft < 48) {
+    return `${hoursLeft} hours`;
+  }
+
+  return `${Math.max(1, Math.floor(deltaMs / (1000 * 60 * 60 * 24)))} days`;
+}
+
+function getKickstarterStateStatusLabel(state: string, daysLeftLabel: string | null) {
+  switch (compactText(state).toLowerCase()) {
+    case "live":
+      return "Live";
+    case "submitted":
+    case "starting":
+    case "draft":
+      return "Upcoming";
+    case "successful":
+    case "failed":
+    case "canceled":
+    case "cancelled":
+    case "suspended":
+      return "Ended";
+    default:
+      return getStatusLabel(state, daysLeftLabel);
+  }
+}
+
+function extractKickstarterStructuredString(html: string, key: string) {
+  const patterns = [
+    new RegExp(`${escapeRegExp(key)}\\\\":\\\\"([^"\\\\]+)`, "i"),
+    new RegExp(`${escapeRegExp(key)}":"([^"]+)`, "i"),
+  ];
+
+  for (const pattern of patterns) {
+    const matched = html.match(pattern)?.[1];
+
+    if (!matched) {
+      continue;
+    }
+
+    return compactText(
+      matched
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, "\\")
+        .replace(/\\u0026/g, "&")
+        .replace(/\\u003c/g, "<")
+        .replace(/\\u003e/g, ">"),
+    );
+  }
+
+  return "";
+}
+
+function extractKickstarterStructuredNumber(html: string, key: string) {
+  const patterns = [
+    new RegExp(`${escapeRegExp(key)}\\\\":([0-9.]+)`, "i"),
+    new RegExp(`${escapeRegExp(key)}":([0-9.]+)`, "i"),
+  ];
+
+  for (const pattern of patterns) {
+    const matched = html.match(pattern)?.[1];
+
+    if (!matched) {
+      continue;
+    }
+
+    const parsed = Number(matched);
+
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function extractKickstarterStructuredDate(html: string, key: string) {
+  const value = extractKickstarterStructuredString(html, key);
+
+  if (!value) {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+export function extractKickstarterDiscoverProjectUrls(html: string) {
+  return extractKickstarterDiscoverProjectEntries(html).map((entry) => entry.campaignUrl);
+}
+
+function extractKickstarterDiscoverProjectEntries(html: string) {
+  const $ = load(html);
+  const entries: KickstarterDiscoverProjectEntry[] = [];
+  const seenUrls = new Set<string>();
+
+  $('a[href*="ref=discovery_category_newest"]').each((_, element) => {
+    const href = $(element).attr("href");
+    const normalized = normalizeKickstarterCampaignUrl(href ? new URL(href, "https://www.kickstarter.com").toString() : "");
+
+    if (!normalized || seenUrls.has(normalized)) {
+      return;
+    }
+
+    seenUrls.add(normalized);
+    entries.push({
+      campaignName: compactText($(element).text()) || decodeSlugFromUrl(normalized),
+      campaignUrl: normalized,
+    });
+  });
+
+  return entries;
+}
+
+function extractKickstarterDiscoverProjectJson(decodedHtml: string, slug: string) {
+  const marker = `"slug":"${slug}"`;
+  const slugIndex = decodedHtml.indexOf(marker);
+
+  if (slugIndex < 0) {
+    return "";
+  }
+
+  const startIndex = decodedHtml.lastIndexOf('{"id":', slugIndex);
+
+  if (startIndex < 0) {
+    return "";
+  }
+
+  let depth = 0;
+
+  for (let index = startIndex; index < decodedHtml.length; index += 1) {
+    const character = decodedHtml[index];
+
+    if (character === "{") {
+      depth += 1;
+      continue;
+    }
+
+    if (character !== "}") {
+      continue;
+    }
+
+    depth -= 1;
+
+    if (depth === 0) {
+      return decodedHtml.slice(startIndex, index + 1);
+    }
+  }
+
+  return "";
+}
+
+function parseKickstarterDiscoverProjectRecord(value: string, campaignUrl: string): KickstarterDiscoverProjectRecord | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const record = JSON.parse(value) as {
+      name?: string;
+      blurb?: string;
+      goal?: number;
+      pledged?: number;
+      state?: string;
+      slug?: string;
+      currency?: string;
+      currency_symbol?: string;
+      deadline?: number;
+      launched_at?: number;
+      backers_count?: number;
+      creator?: { name?: string; urls?: { web?: { user?: string } } };
+      photo?: Record<string, string>;
+    };
+
+    const imageUrl =
+      normalizeImageUrl(record.photo?.["1024x576"], campaignUrl) ||
+      normalizeImageUrl(record.photo?.["1536x864"], campaignUrl) ||
+      normalizeImageUrl(record.photo?.full, campaignUrl) ||
+      normalizeImageUrl(record.photo?.med, campaignUrl) ||
+      normalizeImageUrl(record.photo?.small, campaignUrl);
+
+    return {
+      name: compactText(record.name),
+      blurb: clampPlainText(compactText(record.blurb), 280),
+      goalAmount: typeof record.goal === "number" ? Math.round(record.goal) : null,
+      pledgedAmount: typeof record.pledged === "number" ? Math.round(record.pledged) : null,
+      state: compactText(record.state),
+      slug: compactText(record.slug),
+      currency: compactText(record.currency) || null,
+      currencySymbol: compactText(record.currency_symbol) || null,
+      deadlineAt: typeof record.deadline === "number" ? new Date(record.deadline * 1000) : null,
+      startedAt: typeof record.launched_at === "number" ? new Date(record.launched_at * 1000) : null,
+      backersCount: typeof record.backers_count === "number" ? Math.round(record.backers_count) : null,
+      creatorName: compactText(record.creator?.name) || null,
+      creatorUrl: normalizeUrl(record.creator?.urls?.web?.user) || null,
+      imageUrl,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function createKickstarterCampaignFromDiscoverRecord(
+  record: KickstarterDiscoverProjectRecord,
+  campaignUrl: string,
+  now: Date,
+): KickstarterCampaign | null {
+  if (!meetsKickstarterMinPledgedUsd(record.pledgedAmount)) {
+    return null;
+  }
+
+  const campaignName = compactText(record.name);
+
+  if (!campaignName) {
+    return null;
+  }
+
+  const daysLeftLabel = formatKickstarterDaysLeftLabel(record.deadlineAt, now);
+  const statusLabel = getKickstarterStateStatusLabel(record.state, daysLeftLabel);
+  const classificationHaystack = compactText(`${campaignName} ${record.blurb} ${record.creatorName ?? ""} ${campaignUrl}`);
+
+  return {
+    campaignName,
+    campaignUrl,
+    imageUrl: record.imageUrl,
+    creatorName: record.creatorName ?? "",
+    creatorUrl: record.creatorUrl,
+    startedAt: record.startedAt,
+    startedLabel: formatKickstarterStartedLabel(record.startedAt),
+    summaryRaw: record.blurb,
+    pledgedAmount: record.pledgedAmount,
+    pledgedLabel: formatKickstarterCurrencyLabel(record.pledgedAmount, record.currency, record.currencySymbol),
+    goalAmount: record.goalAmount,
+    goalLabel: formatKickstarterCurrencyLabel(record.goalAmount, record.currency, record.currencySymbol),
+    backersCount: record.backersCount,
+    backersLabel: record.backersCount === null ? "" : new Intl.NumberFormat("en-US").format(record.backersCount),
+    statusLabel,
+    daysLeftLabel,
+    isLive: statusLabel === "Live",
+    collectedAt: now,
+    searchRelevance: Math.max(getSearchRelevance(classificationHaystack), 100),
+  };
+}
+
+export function extractKickstarterDiscoverCampaignsFromHtml(html: string, now: Date) {
+  const decodedHtml = decodeKickstarterHtmlEntities(html);
+  const urls = extractKickstarterDiscoverProjectUrls(html);
+  const campaigns: KickstarterCampaign[] = [];
+
+  for (const campaignUrl of urls) {
+    const slug = new URL(campaignUrl).pathname.split("/").filter(Boolean)[2] ?? "";
+    const projectJson = extractKickstarterDiscoverProjectJson(decodedHtml, slug);
+    const record = parseKickstarterDiscoverProjectRecord(projectJson, campaignUrl);
+    const campaign = record ? createKickstarterCampaignFromDiscoverRecord(record, campaignUrl, now) : null;
+
+    if (campaign) {
+      campaigns.push(campaign);
+    }
+  }
+
+  return campaigns;
+}
+
+export function extractKickstarterStructuredMetadata(html: string, campaignUrl: string): KickstarterStructuredMetadata {
+  const creatorName = extractKickstarterStructuredString(html, "project_creator_name") || null;
+  const imageUrl =
+    normalizeImageUrl(extractKickstarterStructuredString(html, "project_photo_full"), campaignUrl) ||
+    extractPreviewImageUrlFromContent(html, campaignUrl);
+  const pledgedAmount = extractKickstarterStructuredNumber(html, "project_current_amount_pledged_usd");
+  const goalAmount = extractKickstarterStructuredNumber(html, "project_goal_usd");
+  const backersCount = extractKickstarterStructuredNumber(html, "project_backers_count");
+  const startedAt = extractKickstarterStructuredDate(html, "project_launched_at");
+  const summaryRaw = clampPlainText(extractKickstarterStructuredString(html, "project_blurb"), 280);
+
+  return {
+    creatorName,
+    imageUrl,
+    pledgedAmount,
+    pledgedLabel: formatUsdLabel(pledgedAmount),
+    goalAmount,
+    goalLabel: formatUsdLabel(goalAmount),
+    backersCount,
+    backersLabel: backersCount === null ? "" : new Intl.NumberFormat("en-US").format(backersCount),
+    startedAt,
+    startedLabel: formatKickstarterStartedLabel(startedAt),
+    summaryRaw,
+  };
 }
 
 function escapeRegExp(value: string) {
@@ -662,9 +1119,251 @@ async function enrichKickstarterCampaignImage(campaign: KickstarterCampaign) {
   };
 }
 
-async function fetchKickstarterCampaignSupplement(campaignUrl: string): Promise<KickstarterCampaignSupplement | null> {
-  const results = await searchWithTavily(`"${campaignUrl}"`, { maxResults: 8 });
+export function createKickstarterCampaignFromProjectPage(input: {
+  pageHtml: string;
+  pageText: string;
+  pageTitle: string;
+  pageUrl: string;
+  now?: Date;
+}) {
+  const now = input.now ?? new Date();
+  const baseCandidate = parseKickstarterCampaignCandidate(
+    {
+      title: input.pageTitle,
+      url: input.pageUrl,
+      content: input.pageText,
+      score: 1,
+    },
+    now,
+    { trustTechnologySource: true },
+  );
 
+  if (!baseCandidate) {
+    return null;
+  }
+
+  const structured = extractKickstarterStructuredMetadata(input.pageHtml, baseCandidate.campaignUrl);
+  const classificationHaystack = compactText(
+    `${input.pageTitle} ${input.pageText} ${structured.summaryRaw} ${structured.creatorName ?? ""} ${baseCandidate.campaignUrl}`,
+  );
+  const campaign = {
+    ...baseCandidate,
+    imageUrl: baseCandidate.imageUrl ?? structured.imageUrl,
+    creatorName: structured.creatorName ?? baseCandidate.creatorName,
+    startedAt: structured.startedAt ?? baseCandidate.startedAt,
+    startedLabel: structured.startedLabel ?? baseCandidate.startedLabel,
+    summaryRaw: baseCandidate.summaryRaw || structured.summaryRaw,
+    pledgedAmount: baseCandidate.pledgedAmount ?? structured.pledgedAmount,
+    pledgedLabel: baseCandidate.pledgedLabel || structured.pledgedLabel,
+    goalAmount: baseCandidate.goalAmount ?? structured.goalAmount,
+    goalLabel: baseCandidate.goalLabel || structured.goalLabel,
+    backersCount: baseCandidate.backersCount ?? structured.backersCount,
+    backersLabel: baseCandidate.backersLabel || structured.backersLabel,
+    searchRelevance: Math.max(baseCandidate.searchRelevance, getSearchRelevance(classificationHaystack)),
+  } satisfies KickstarterCampaign;
+
+  return meetsKickstarterMinPledgedUsd(campaign.pledgedAmount) ? campaign : null;
+}
+
+async function withKickstarterBrowserContext<T>(
+  callback: (context: import("playwright").BrowserContext) => Promise<T>,
+): Promise<T> {
+  const { chromium } = await import("playwright");
+  const browser = await chromium.launch({
+    headless: true,
+    args: ["--disable-blink-features=AutomationControlled"],
+  });
+
+  try {
+    const context = await browser.newContext({
+      locale: "en-US",
+      timezoneId: "America/New_York",
+      userAgent: KICKSTARTER_BROWSER_USER_AGENT,
+      viewport: { width: 1440, height: 900 },
+    });
+
+    await context.addInitScript(() => {
+      Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+      Object.defineProperty(navigator, "platform", { get: () => "MacIntel" });
+      Object.defineProperty(navigator, "languages", { get: () => ["en-US", "en"] });
+      // `window.chrome` is commonly checked by bot defenses.
+      (window as typeof window & { chrome?: { runtime: Record<string, never> } }).chrome = { runtime: {} };
+    });
+
+    try {
+      return await callback(context);
+    } finally {
+      await context.close();
+    }
+  } finally {
+    await browser.close();
+  }
+}
+
+async function fetchKickstarterProjectPageCandidate(
+  context: import("playwright").BrowserContext,
+  campaignUrl: string,
+  now: Date,
+) {
+  const page = await context.newPage();
+
+  try {
+    page.setDefaultNavigationTimeout(DISCOVER_REQUEST_TIMEOUT_MS);
+    const response = await page.goto(campaignUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: DISCOVER_REQUEST_TIMEOUT_MS,
+    });
+
+    if (!response?.ok()) {
+      return null;
+    }
+
+    await page.waitForTimeout(DISCOVER_SETTLE_DELAY_MS);
+    const pageTitle = compactText(await page.title());
+
+    if (/just a moment/i.test(pageTitle) || /^discover\b/i.test(pageTitle)) {
+      return null;
+    }
+
+    const [pageHtml, pageText] = await Promise.all([page.content(), page.locator("body").innerText()]);
+    return createKickstarterCampaignFromProjectPage({
+      pageHtml,
+      pageText,
+      pageTitle,
+      pageUrl: campaignUrl,
+      now,
+    });
+  } catch {
+    return null;
+  } finally {
+    await page.close();
+  }
+}
+
+function buildKickstarterDiscoverNewestUrl(pageNumber: number) {
+  if (pageNumber <= 1) {
+    return KICKSTARTER_DISCOVER_NEWEST_URL;
+  }
+
+  return `${KICKSTARTER_DISCOVER_NEWEST_URL}&page=${pageNumber}`;
+}
+
+function coalesceParsedKickstarterSearchResults(results: TavilySearchResult[], now: Date) {
+  const candidates = results
+    .map((result) => parseKickstarterCampaignCandidate(result, now, { trustTechnologySource: true }))
+    .filter((candidate): candidate is KickstarterCampaign => Boolean(candidate));
+
+  return coalesceKickstarterCampaigns(candidates, 1)[0] ?? null;
+}
+
+async function fetchKickstarterCampaignFromDiscoverEntry(
+  entry: KickstarterDiscoverProjectEntry,
+  now: Date,
+): Promise<KickstarterCampaign | null> {
+  const exactUrlResults = await searchWithTavily(`"${entry.campaignUrl}"`, { maxResults: 8 });
+  const exactUrlMatches = exactUrlResults.filter(
+    (result) => normalizeKickstarterCampaignUrl(result.url) === entry.campaignUrl,
+  );
+  const exactUrlCandidate = coalesceParsedKickstarterSearchResults(
+    exactUrlMatches.length > 0 ? exactUrlMatches : exactUrlResults,
+    now,
+  );
+
+  if (exactUrlCandidate) {
+    return exactUrlCandidate;
+  }
+
+  if (!entry.campaignName) {
+    return null;
+  }
+
+  const titleResults = await searchWithTavily(`"${entry.campaignName}" site:kickstarter.com/projects`, { maxResults: 8 });
+  const titleMatches = titleResults.filter((result) => normalizeKickstarterCampaignUrl(result.url) === entry.campaignUrl);
+  return coalesceParsedKickstarterSearchResults(titleMatches.length > 0 ? titleMatches : titleResults, now);
+}
+
+async function fetchKickstarterDiscoverCampaigns(limit: number, now: Date) {
+  return withKickstarterBrowserContext(async (context) => {
+    const page = await context.newPage();
+
+    try {
+      page.setDefaultNavigationTimeout(DISCOVER_REQUEST_TIMEOUT_MS);
+      const campaigns: KickstarterCampaign[] = [];
+      const discoverEntries: KickstarterDiscoverProjectEntry[] = [];
+      const seenDiscoverUrls = new Set<string>();
+      const discoverTargetLimit = Math.max(limit, KICKSTARTER_DISCOVER_URL_LIMIT);
+
+      for (let pageNumber = 1; pageNumber <= KICKSTARTER_DISCOVER_PAGE_LIMIT; pageNumber += 1) {
+        const response = await page.goto(buildKickstarterDiscoverNewestUrl(pageNumber), {
+          waitUntil: "domcontentloaded",
+          timeout: DISCOVER_REQUEST_TIMEOUT_MS,
+        });
+
+        if (!response?.ok()) {
+          break;
+        }
+
+        await page.waitForTimeout(DISCOVER_SETTLE_DELAY_MS);
+
+        if (/just a moment/i.test(await page.title())) {
+          break;
+        }
+
+        const discoverHtml = await page.content();
+        const pageCampaigns = extractKickstarterDiscoverCampaignsFromHtml(discoverHtml, now);
+
+        if (pageCampaigns.length > 0) {
+          campaigns.push(...pageCampaigns);
+        }
+
+        for (const entry of extractKickstarterDiscoverProjectEntries(discoverHtml)) {
+          if (seenDiscoverUrls.has(entry.campaignUrl)) {
+            continue;
+          }
+
+          seenDiscoverUrls.add(entry.campaignUrl);
+          discoverEntries.push(entry);
+        }
+
+        if (discoverEntries.length >= discoverTargetLimit && pageNumber > 1) {
+          break;
+        }
+      }
+
+      if (coalesceKickstarterCampaigns(campaigns, discoverTargetLimit).length >= limit) {
+        return coalesceKickstarterCampaigns(campaigns, discoverTargetLimit);
+      }
+
+      const seenUrls = new Set(campaigns.map((campaign) => campaign.campaignUrl));
+
+      for (const entry of discoverEntries.slice(0, discoverTargetLimit)) {
+        if (seenUrls.has(entry.campaignUrl)) {
+          continue;
+        }
+
+        let campaign = await fetchKickstarterCampaignFromDiscoverEntry(entry, now);
+
+        if (!campaign) {
+          campaign = await fetchKickstarterProjectPageCandidate(context, entry.campaignUrl, now);
+        }
+
+        if (campaign) {
+          campaigns.push(campaign);
+          seenUrls.add(campaign.campaignUrl);
+        }
+      }
+
+      return coalesceKickstarterCampaigns(campaigns, discoverTargetLimit);
+    } finally {
+      await page.close();
+    }
+  });
+}
+
+function extractKickstarterCampaignSupplementFromResults(
+  results: TavilySearchResult[],
+  campaignUrl: string,
+): KickstarterCampaignSupplement | null {
   if (results.length === 0) {
     return null;
   }
@@ -709,11 +1408,40 @@ async function fetchKickstarterCampaignSupplement(campaignUrl: string): Promise<
     : null;
 }
 
+async function fetchKickstarterCampaignSupplement(
+  campaignUrl: string,
+  campaignName: string,
+): Promise<KickstarterCampaignSupplement | null> {
+  const exactUrlResults = await searchWithTavily(`"${campaignUrl}"`, { maxResults: 8 });
+  const exactUrlSupplement = extractKickstarterCampaignSupplementFromResults(exactUrlResults, campaignUrl);
+
+  if (exactUrlSupplement?.startedAt && exactUrlSupplement.imageUrl) {
+    return exactUrlSupplement;
+  }
+
+  if (!campaignName) {
+    return exactUrlSupplement;
+  }
+
+  const titleResults = await searchWithTavily(`"${campaignName}" site:kickstarter.com/projects`, { maxResults: 8 });
+  const titleSupplement = extractKickstarterCampaignSupplementFromResults(titleResults, campaignUrl);
+
+  if (!titleSupplement) {
+    return exactUrlSupplement;
+  }
+
+  return {
+    startedAt: exactUrlSupplement?.startedAt ?? titleSupplement.startedAt,
+    startedLabel: exactUrlSupplement?.startedLabel ?? titleSupplement.startedLabel,
+    imageUrl: exactUrlSupplement?.imageUrl ?? titleSupplement.imageUrl,
+  };
+}
+
 async function enrichKickstarterCampaign(campaign: KickstarterCampaign) {
   let nextCampaign = campaign;
 
   if (!campaign.startedAt || !campaign.imageUrl) {
-    const supplement = await fetchKickstarterCampaignSupplement(campaign.campaignUrl);
+    const supplement = await fetchKickstarterCampaignSupplement(campaign.campaignUrl, campaign.campaignName);
 
     if (supplement) {
       nextCampaign = {
@@ -735,6 +1463,7 @@ async function enrichKickstarterCampaign(campaign: KickstarterCampaign) {
 export function parseKickstarterCampaignCandidate(
   result: TavilySearchResult,
   now = new Date(),
+  options?: KickstarterCandidateParseOptions,
 ): KickstarterCampaign | null {
   const campaignUrl = normalizeKickstarterCampaignUrl(result.url);
 
@@ -746,7 +1475,7 @@ export function parseKickstarterCampaignCandidate(
   const narrativeText = extractKickstarterNarrative(result.content || result.title);
   const classificationHaystack = compactText(`${result.title} ${narrativeText} ${campaignUrl}`);
 
-  if (!isTargetKickstarterProject(classificationHaystack)) {
+  if (!options?.trustTechnologySource && !isTargetKickstarterProject(classificationHaystack)) {
     return null;
   }
 
@@ -766,7 +1495,15 @@ export function parseKickstarterCampaignCandidate(
   const hasFundingSignal =
     pledged.amount !== null || goal.amount !== null || backers.count !== null || Boolean(daysLeftLabel) || Boolean(startDate.startedAt);
 
-  if (!hasFundingSignal && !isTargetKickstarterProject(classificationHaystack, { requireStrongSignal: true })) {
+  if (
+    !hasFundingSignal &&
+    !options?.trustTechnologySource &&
+    !isTargetKickstarterProject(classificationHaystack, { requireStrongSignal: true })
+  ) {
+    return null;
+  }
+
+  if (!meetsKickstarterMinPledgedUsd(pledged.amount)) {
     return null;
   }
 
@@ -789,7 +1526,11 @@ export function parseKickstarterCampaignCandidate(
     daysLeftLabel,
     isLive: statusLabel === "Live",
     collectedAt: now,
-    searchRelevance: Math.max(getSearchRelevance(classificationHaystack), Math.round(result.score * 100)),
+    searchRelevance: Math.max(
+      getSearchRelevance(classificationHaystack),
+      Math.round(result.score * 100),
+      options?.trustTechnologySource ? 100 : 0,
+    ),
   };
 }
 
@@ -818,6 +1559,10 @@ export function coalesceKickstarterCampaigns(candidates: KickstarterCampaign[], 
   const deduped = new Map<string, KickstarterCampaign>();
 
   for (const candidate of candidates) {
+    if (!meetsKickstarterMinPledgedUsd(candidate.pledgedAmount)) {
+      continue;
+    }
+
     const existing = deduped.get(candidate.campaignUrl);
     deduped.set(candidate.campaignUrl, existing ? pickPreferredCampaign(existing, candidate) : candidate);
   }
@@ -859,7 +1604,7 @@ export function coalesceKickstarterCampaigns(candidates: KickstarterCampaign[], 
     .slice(0, limit);
 }
 
-async function searchWithTavily(query: string, options?: { timeRange?: "week" | "month"; maxResults?: number }) {
+async function searchWithTavily(query: string, options?: { timeRange?: "week" | "month" | "year"; maxResults?: number }) {
   const tavilyApiKey = await getTavilyApiKey();
 
   if (!tavilyApiKey) {
@@ -902,7 +1647,7 @@ async function searchWithTavily(query: string, options?: { timeRange?: "week" | 
       .map((result: { title?: string; url?: string; content?: string; raw_content?: string; score?: number }) => ({
         title: compactText(result.title),
         url: normalizeUrl(result.url),
-        content: compactText(result.raw_content ?? result.content),
+        content: mergeTavilySearchContent(result.content, result.raw_content),
         score: typeof result.score === "number" ? result.score : 0,
       }))
       .filter((result: TavilySearchResult) => result.url && (result.title || result.content));
@@ -913,19 +1658,31 @@ async function searchWithTavily(query: string, options?: { timeRange?: "week" | 
 
 export async function fetchKickstarterCampaigns(limit = 10) {
   const now = new Date();
-  const candidates: KickstarterCampaign[] = [];
+  const preEnrichLimit = Math.max(limit, KICKSTARTER_PRE_ENRICH_POOL_LIMIT);
+  const candidates: KickstarterCampaign[] = await fetchKickstarterDiscoverCampaigns(limit, now).catch((error) => {
+    const reason = error instanceof Error ? error.message : "unknown browser fetch error";
+    console.warn("Kickstarter discover fetch failed:", reason);
+    return [];
+  });
 
-  for (const bucket of QUERY_BUCKETS) {
-    const results = await searchWithTavily(bucket.query, { timeRange: bucket.timeRange });
+  for (const plan of SEARCH_PLANS) {
+    for (const window of plan.windows) {
+      const results = await searchWithTavily(plan.query, {
+        timeRange: window.timeRange,
+        maxResults: window.maxResults,
+      });
 
-    for (const result of results) {
-      const candidate = parseKickstarterCampaignCandidate(result, now);
+      for (const result of results) {
+        const candidate = parseKickstarterCampaignCandidate(result, now);
 
-      if (candidate) {
-        candidates.push(candidate);
+        if (candidate) {
+          candidates.push(candidate);
+        }
       }
     }
   }
 
-  return Promise.all(coalesceKickstarterCampaigns(candidates, limit).map((campaign) => enrichKickstarterCampaign(campaign)));
+  const shortlisted = coalesceKickstarterCampaigns(candidates, preEnrichLimit);
+  const enriched = await Promise.all(shortlisted.map((campaign) => enrichKickstarterCampaign(campaign)));
+  return coalesceKickstarterCampaigns(enriched, limit);
 }
