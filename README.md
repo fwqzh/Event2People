@@ -1,10 +1,8 @@
 # Event2People
 
-Event2People, surfaced in the UI as **LANCHI SIGNAL**, is an event-first intelligence workspace for finding the people behind frontier projects.
+Event2People is an event-first intelligence workspace for finding the people behind frontier projects.
 
 Instead of starting from a company list or a CRM, the product starts from fresh public signals across **GitHub**, **arXiv**, and **Kickstarter**, then turns those signals into structured event cards, linked people profiles, and a lightweight action pipeline. The goal is simple: when something important starts moving, help you see **who is behind it**, **why it matters**, and **who you may want to contact next**.
-
-The current UI is primarily Chinese, but the product flow and deployment model are documented here in English.
 
 ## What the product does
 
